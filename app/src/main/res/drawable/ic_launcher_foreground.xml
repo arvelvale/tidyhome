@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  一键理桌 App 图标前景（自适应图标，108×108 画布，安全区为中心半径 33 的圆）。
+  白色圆角"文件夹" + 2×2 分类色小方块（社交绿 / 购物橙 / 影音粉 / 学习蓝，对应 App 内分类色）
+  + 右上角黄色四角星（"一键"）。底色见 ic_launcher_background。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 文件夹：42×42，圆角 11，居中 -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M44,33 h20 a11,11 0 0 1 11,11 v20 a11,11 0 0 1 -11,11 h-20 a11,11 0 0 1 -11,-11 v-20 a11,11 0 0 1 11,-11 z" />
+
+    <!-- 四个分类小方块：13×13，圆角 3.5，间距 4 -->
+    <path
+        android:fillColor="#43C27A"
+        android:pathData="M42.5,39 h6 a3.5,3.5 0 0 1 3.5,3.5 v6 a3.5,3.5 0 0 1 -3.5,3.5 h-6 a3.5,3.5 0 0 1 -3.5,-3.5 v-6 a3.5,3.5 0 0 1 3.5,-3.5 z" />
+    <path
+        android:fillColor="#FF9A52"
+        android:pathData="M59.5,39 h6 a3.5,3.5 0 0 1 3.5,3.5 v6 a3.5,3.5 0 0 1 -3.5,3.5 h-6 a3.5,3.5 0 0 1 -3.5,-3.5 v-6 a3.5,3.5 0 0 1 3.5,-3.5 z" />
+    <path
+        android:fillColor="#FF7FA8"
+        android:pathData="M42.5,56 h6 a3.5,3.5 0 0 1 3.5,3.5 v6 a3.5,3.5 0 0 1 -3.5,3.5 h-6 a3.5,3.5 0 0 1 -3.5,-3.5 v-6 a3.5,3.5 0 0 1 3.5,-3.5 z" />
+    <path
+        android:fillColor="#3A8CE0"
+        android:pathData="M59.5,56 h6 a3.5,3.5 0 0 1 3.5,3.5 v6 a3.5,3.5 0 0 1 -3.5,3.5 h-6 a3.5,3.5 0 0 1 -3.5,-3.5 v-6 a3.5,3.5 0 0 1 3.5,-3.5 z" />
+
+    <!-- 四角星：中心 (77,31)，半径 7，压在文件夹右上角 -->
+    <path
+        android:fillColor="#FFD25A"
+        android:pathData="M77,24 Q77.8,30.2 84,31 Q77.8,31.8 77,38 Q76.2,31.8 70,31 Q76.2,30.2 77,24 z" />
+</vector>

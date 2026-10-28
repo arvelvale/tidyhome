@@ -1,0 +1,635 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>一键理桌 — 桌面乱了，就交给我</title>
+<meta name="description" content="一键把安卓桌面上散乱的图标，按类别收进文件夹。不换桌面，全程离线，随时能喊停。开发中，已在一加 13 / ColorOS 上跑通关键动作。" />
+<meta property="og:title" content="一键理桌 — 桌面乱了，就交给我" />
+<meta property="og:description" content="一键把安卓桌面上散乱的图标，按类别收进文件夹。不换桌面，全程离线，随时能喊停。" />
+<meta property="og:image" content="https://arvelvale.github.io/tidyhome/og.png" />
+<meta property="og:type" content="website" />
+<meta name="theme-color" content="#3A8CE0" />
+<link rel="icon" href="logo.svg" type="image/svg+xml" />
+<script>
+/* 语言在解析正文前定下：?lang= → 上次选择 → 浏览器语言。默认中文。 */
+window.TIDY_LANG = (() => {
+  const ok = ["zh", "en"];
+  const q = new URLSearchParams(location.search).get("lang");
+  if (ok.includes(q)) return q;
+  try { const s = localStorage.getItem("tidyhome.lang"); if (ok.includes(s)) return s; } catch {}
+  for (const l of navigator.languages || [navigator.language]) {
+    if (/^zh/i.test(l)) return "zh";
+    if (/^en/i.test(l)) return "en";
+  }
+  return "zh";
+})();
+document.documentElement.lang = window.TIDY_LANG === "zh" ? "zh-CN" : "en";
+</script>
+<!--
+  设计：安卓 App 本身是白底 + 钴蓝 + 分类浅色（ADR-009），落地页沿用同一套，不另起炉灶。
+  颜色只用在"有含义"的地方：钴蓝是动作，分类色是"这是哪一类"，琥珀只用来标"还没完成"。
+  手机里的动画是示意，不是截图：应用图标是占位色块，名字是通用词，不用任何真实品牌。
+  字体自托管（fonts/），页面不请求任何第三方：一个"全程离线"的工具，它的主页也不该把访客交给别人。
+-->
+<style>
+@font-face { font-family: "Geist"; src: url("fonts/geist.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "Noto SC"; src: url("fonts/noto-sc.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+
+:root {
+  color-scheme: light;
+  --bg: #FFFFFF; --soft: #F4F6F8; --ink: #1E2228; --ink2: #5F636A; --ink3: #8F9298; --line: #E2E5E8;
+  --pri: #3A8CE0; --pri-deep: #0064B5; --pri-soft: #E2F2FF; --pri-light: #A6D5FF;
+  --amber: #E29936; --amber-soft: #FCF4E3; --amber-ink: #7C5600;
+  --wall: #28313D;
+  --font: "Geist", "Noto SC", "PingFang SC", "HarmonyOS Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  --wrap: 1080px;
+  --ease: cubic-bezier(.2, .8, .2, 1);
+}
+/* 分类色：浅底 + 深字，与 App 内一致 */
+.c-social   { --cb: #EAF9EC; --ci: #197037; }
+.c-shopping { --cb: #FFF0E7; --ci: #934319; }
+.c-media    { --cb: #FFEEF5; --ci: #903C61; }
+.c-work     { --cb: #E9F6FF; --ci: #1A609E; }
+.c-travel   { --cb: #E3FAFC; --ci: #006F7D; }
+.c-finance  { --cb: #FCF4E3; --ci: #7C5600; }
+.c-life     { --cb: #F1F7E8; --ci: #506817; }
+.c-game     { --cb: #F6F2FF; --ci: #674E91; }
+.c-tools    { --cb: #F3F4F7; --ci: #585E68; }
+
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.75 var(--font); -webkit-font-smoothing: antialiased; overflow-x: clip; }
+::selection { background: var(--pri-light); }
+a { color: var(--pri-deep); text-decoration: none; }
+a:hover { text-decoration: underline; text-underline-offset: 3px; }
+:focus-visible { outline: 2px solid var(--pri); outline-offset: 3px; border-radius: 6px; }
+button { font: inherit; color: inherit; border: 0; background: none; padding: 0; cursor: pointer; }
+svg.i { width: 1em; height: 1em; flex: none; fill: none; stroke: currentColor; stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+.wrap { width: min(var(--wrap), 100% - 40px); margin-inline: auto; }
+h1, h2, h3 { margin: 0; font-weight: 600; text-wrap: balance; }
+p { margin: 0; text-wrap: pretty; }
+.eyebrow { font-size: 13px; letter-spacing: .14em; color: var(--ink3); font-weight: 500; }
+
+/* ---------- 顶栏 ---------- */
+.nav { position: sticky; top: 0; z-index: 20; background: rgba(255,255,255,.88); backdrop-filter: saturate(1.4) blur(12px); border-bottom: 1px solid transparent; transition: border-color .2s; }
+.nav.scrolled { border-bottom-color: var(--line); }
+.nav .wrap { height: 64px; display: flex; align-items: center; gap: 28px; }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 600; color: var(--ink); font-size: 16px; }
+.brand:hover { text-decoration: none; }
+.brand img { width: 30px; height: 30px; border-radius: 8px; }
+.nav-links { display: flex; gap: 24px; margin-left: auto; font-size: 14.5px; }
+.nav-links a { color: var(--ink2); }
+.nav-links a:hover { color: var(--ink); text-decoration: none; }
+.lang { display: inline-flex; padding: 3px; border-radius: 999px; background: var(--soft); font-size: 13px; }
+.lang button { padding: 3px 11px; border-radius: 999px; color: var(--ink3); transition: background .2s, color .2s; }
+.lang button[aria-pressed="true"] { background: #fff; color: var(--ink); box-shadow: 0 1px 2px rgba(0,0,0,.08); }
+
+/* ---------- 首屏 ---------- */
+.hero { display: grid; grid-template-columns: 1.02fr .98fr; gap: 56px; align-items: center; padding: 64px 0 96px; }
+.badge { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px 6px 10px; border-radius: 999px; background: var(--amber-soft); color: var(--amber-ink); font-size: 13.5px; }
+.badge::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
+.hero h1 { margin-top: 22px; font-size: clamp(42px, 6.2vw, 68px); line-height: 1.14; letter-spacing: -.012em; }
+:lang(en) .hero h1 { letter-spacing: -.03em; line-height: 1.06; }
+.hero .lead { margin-top: 22px; max-width: 30em; font-size: 18px; color: var(--ink2); line-height: 1.8; }
+.cta { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 34px; }
+.btn { display: inline-flex; align-items: center; gap: 8px; height: 50px; padding: 0 26px; border-radius: 25px; font-weight: 500; font-size: 15.5px; transition: transform .12s, background .2s; }
+.btn:hover { text-decoration: none; }
+.btn:active { transform: scale(.97); }
+.btn.pri { background: var(--pri); color: #fff; }
+.btn.pri:hover { background: var(--pri-deep); }
+.btn.ghost { background: var(--soft); color: var(--ink); }
+.btn.ghost:hover { background: #E9EDF1; }
+.trust { display: flex; flex-wrap: wrap; gap: 10px 22px; margin-top: 34px; font-size: 14px; color: var(--ink2); }
+.trust span { display: inline-flex; align-items: center; gap: 7px; }
+.trust .i { color: var(--pri); font-size: 17px; }
+
+/* ---------- 手机示意 ---------- */
+.stage { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+.phone { position: relative; width: 300px; padding: 10px; background: #1c1c1c; border-radius: 46px; box-shadow: 0 0 0 2px #2c2c2c, 0 28px 70px rgba(30,60,110,.22); }
+.phone::after { content: ""; position: absolute; right: -4px; top: 150px; width: 4px; height: 78px; border-radius: 0 3px 3px 0; background: #2a2a2a; transition: background .3s, box-shadow .3s; }
+.phone.stoppable::after { background: var(--pri); box-shadow: 0 0 0 5px rgba(58,140,224,.25); }
+.screen { position: relative; width: 280px; height: 580px; border-radius: 37px; overflow: hidden; background: var(--wall); }
+.cam { position: absolute; top: 11px; left: 50%; width: 12px; height: 12px; margin-left: -6px; border-radius: 50%; background: #000; z-index: 6; }
+.sb { position: absolute; top: 9px; left: 24px; right: 24px; display: flex; justify-content: space-between; font-size: 11.5px; font-weight: 500; color: #fff; z-index: 5; }
+.sb em { font-style: normal; display: inline-flex; align-items: center; gap: 4px; }
+.sb em i { width: 20px; height: 9px; border: 1.4px solid #fff; border-radius: 3px; padding: 1px; display: inline-block; }
+.sb em i::after { content: ""; display: block; width: 78%; height: 100%; background: #fff; border-radius: 1px; }
+.pill { position: absolute; top: 36px; left: 12px; right: 12px; padding: 9px 12px 10px; border-radius: 16px; background: rgba(18,22,28,.66); backdrop-filter: blur(8px); color: #fff; font-size: 12.5px; z-index: 5; pointer-events: none; opacity: 0; transform: translateY(-6px); transition: opacity .3s, transform .3s; }
+.pill.on { opacity: 1; transform: none; }
+.pill .row { display: flex; justify-content: space-between; gap: 8px; white-space: nowrap; }
+.pill .row span:first-child { overflow: hidden; text-overflow: ellipsis; }
+.pill .row span:last-child { opacity: .75; font-variant-numeric: tabular-nums; }
+.pill .bar { height: 3px; margin-top: 8px; border-radius: 2px; background: rgba(255,255,255,.2); overflow: hidden; }
+.pill .bar i { display: block; height: 100%; width: 0; background: var(--pri-light); transition: width .4s; }
+.pill .hint { margin-top: 7px; font-size: 10.5px; opacity: .65; display: flex; align-items: center; gap: 5px; }
+.pill.done .bar i { background: #8BE0A9; }
+.grid { position: absolute; inset: 0; }
+.t { position: absolute; left: 0; top: 0; width: 46px; height: 46px; transform-origin: 0 0; transition: transform .6s var(--ease); will-change: transform; }
+.t i { display: grid; place-items: center; width: 46px; height: 46px; border-radius: 13px; font: 500 17px/1 var(--font); font-style: normal; background: oklch(.88 .055 var(--h)); color: oklch(.36 .07 var(--h)); }
+.t b { position: absolute; top: 50px; left: -12px; width: 70px; text-align: center; font: 400 10.5px/1.2 var(--font); color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.4); transition: opacity .25s; white-space: nowrap; }
+.t.mini b { opacity: 0; }
+.t.over { z-index: 4; }
+.f { position: absolute; left: 0; top: 0; width: 50px; height: 50px; border-radius: 15px; background: rgba(255,255,255,.2); opacity: 0; transition: opacity .35s; }
+.f.on { opacity: 1; }
+.fl { position: absolute; left: 0; top: 0; width: 70px; text-align: center; font: 500 10.5px/1.2 var(--font); color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,.4); opacity: 0; transition: opacity .35s; white-space: nowrap; }
+.fl.on { opacity: 1; }
+.dock { position: absolute; left: 12px; right: 12px; bottom: 16px; height: 66px; border-radius: 24px; background: rgba(255,255,255,.14); display: flex; justify-content: space-around; align-items: center; }
+.dock i { width: 46px; height: 46px; border-radius: 13px; background: rgba(255,255,255,.2); }
+.home-bar { position: absolute; bottom: 5px; left: 50%; width: 96px; height: 4px; margin-left: -48px; border-radius: 2px; background: rgba(255,255,255,.5); }
+.caption { font-size: 13px; color: var(--ink3); display: flex; align-items: center; gap: 14px; }
+.caption button { display: inline-flex; align-items: center; gap: 6px; color: var(--pri-deep); font-size: 13px; }
+.caption button:hover { text-decoration: underline; text-underline-offset: 3px; }
+
+/* ---------- 通用分区 ---------- */
+section { padding: 88px 0; }
+section.alt { background: var(--soft); }
+.sec-h { max-width: 640px; }
+.sec-h h2 { margin-top: 12px; font-size: clamp(28px, 3.6vw, 40px); line-height: 1.25; letter-spacing: -.006em; }
+.sec-h p { margin-top: 14px; color: var(--ink2); font-size: 16.5px; }
+
+/* 三步 */
+.steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 44px; }
+.step { background: var(--soft); border-radius: 22px; padding: 30px 28px 32px; }
+.step .no { display: flex; align-items: center; justify-content: space-between; }
+.step .ic { display: grid; place-items: center; width: 44px; height: 44px; border-radius: 14px; background: var(--pri-soft); color: var(--pri-deep); font-size: 22px; }
+.step .n { font-size: 15px; color: var(--ink3); font-variant-numeric: tabular-nums; }
+.step h3 { margin-top: 24px; font-size: 21px; }
+.step p { margin-top: 10px; color: var(--ink2); font-size: 15.5px; }
+
+/* 分类 */
+.cats { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 32px; }
+.cat { display: inline-flex; align-items: center; gap: 8px; padding: 9px 16px 9px 13px; border-radius: 14px; background: var(--cb); color: var(--ci); font-size: 15px; font-weight: 500; }
+.cat .i { font-size: 16px; }
+.cat-note { margin-top: 20px; font-size: 14.5px; color: var(--ink2); max-width: 40em; }
+
+/* 现状 */
+.status { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; margin-top: 44px; }
+.col { background: #fff; border-radius: 22px; padding: 28px 26px 30px; }
+.tag { display: inline-flex; align-items: center; gap: 6px; padding: 4px 12px; border-radius: 999px; font-size: 13px; font-weight: 500; background: var(--cb); color: var(--ci); }
+.col ul { list-style: none; margin: 20px 0 0; padding: 0; display: grid; gap: 16px; }
+.col li { position: relative; padding-left: 22px; font-size: 15.5px; color: var(--ink); line-height: 1.65; }
+.col li::before { content: ""; position: absolute; left: 2px; top: 11px; width: 7px; height: 7px; border-radius: 50%; background: var(--ci); opacity: .7; }
+.col li small { display: block; margin-top: 3px; font-size: 13.5px; color: var(--ink3); }
+.device { margin-top: 24px; font-size: 13.5px; color: var(--ink3); }
+
+/* 实测笔记 */
+.notes { display: grid; gap: 16px; margin-top: 44px; }
+.note { display: grid; grid-template-columns: 64px 1fr; gap: 20px; background: var(--soft); border-radius: 22px; padding: 28px 30px; }
+.note .k { font-size: 13px; color: var(--ink3); padding-top: 4px; font-variant-numeric: tabular-nums; }
+.note h3 { font-size: 19px; line-height: 1.45; }
+.note p { margin-top: 8px; color: var(--ink2); font-size: 15.5px; }
+.note code { font: 500 13.5px/1 var(--font); padding: 2px 7px; border-radius: 6px; background: #fff; color: var(--ink); }
+
+/* FAQ */
+.faq { margin-top: 36px; max-width: 760px; }
+.faq details { border-top: 1px solid var(--line); }
+.faq details:last-child { border-bottom: 1px solid var(--line); }
+.faq summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; align-items: center; gap: 16px; padding: 20px 4px; font-size: 17px; font-weight: 500; }
+.faq summary::-webkit-details-marker { display: none; }
+.faq summary .i { font-size: 18px; color: var(--ink3); transition: transform .25s var(--ease); }
+.faq details[open] summary .i { transform: rotate(90deg); }
+.faq .a { padding: 0 4px 22px; color: var(--ink2); font-size: 15.5px; max-width: 42em; }
+
+/* 页脚 */
+footer { border-top: 1px solid var(--line); padding: 36px 0 56px; font-size: 14px; color: var(--ink3); }
+footer .wrap { display: flex; flex-wrap: wrap; gap: 12px 28px; align-items: center; }
+footer a { color: var(--ink2); }
+footer .sp { margin-left: auto; }
+
+/* ---------- 窄屏 ---------- */
+@media (max-width: 920px) {
+  .hero { grid-template-columns: 1fr; gap: 44px; padding: 40px 0 72px; }
+  .stage { order: 2; }
+  .steps, .status { grid-template-columns: 1fr; }
+  .nav-links { display: none; }
+  .lang { margin-left: auto; }
+  section { padding: 64px 0; }
+  .note { grid-template-columns: 1fr; gap: 6px; padding: 24px 22px; }
+  footer .sp { margin-left: 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .t, .f, .fl, .pill, .pill .bar i { transition: none; }
+}
+</style>
+</head>
+<body>
+
+<header class="nav" id="nav">
+  <div class="wrap">
+    <a class="brand" href="#top"><img src="logo.svg" alt="" width="30" height="30" />一键理桌</a>
+    <nav class="nav-links">
+      <a href="#how" data-i="nav.how">怎么整理</a>
+      <a href="#status" data-i="nav.status">现在到哪了</a>
+      <a href="#notes" data-i="nav.notes">实测笔记</a>
+      <a href="#faq" data-i="nav.faq">常见问题</a>
+    </nav>
+    <div class="lang" role="group" aria-label="Language">
+      <button type="button" data-lang="zh" aria-pressed="true">中</button>
+      <button type="button" data-lang="en" aria-pressed="false">EN</button>
+    </div>
+  </div>
+</header>
+
+<main id="top">
+  <div class="wrap hero">
+    <div>
+      <span class="badge" data-i="hero.badge">开发中 · 已在一加 13 / ColorOS 上跑通关键动作</span>
+      <h1 data-i="hero.h1">桌面乱了，<br />就交给我。</h1>
+      <p class="lead" data-i="hero.lead">点一下，一键理桌把安卓桌面上散落的图标，按类别收进文件夹。不用换桌面，全程离线，随时能喊停。</p>
+      <div class="cta">
+        <a class="btn pri" href="#how"><span data-i="hero.cta1">看它怎么整理</span> <svg class="i" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></a>
+        <a class="btn ghost" href="#status" data-i="hero.cta2">现在做到哪一步了</a>
+      </div>
+      <div class="trust">
+        <span><svg class="i" viewBox="0 0 24 24"><path d="M12 20h.01"/><path d="M8.5 16.429a5 5 0 0 1 7 0"/><path d="M5 12.859a10 10 0 0 1 5.17-2.69"/><path d="M19 12.859a10 10 0 0 0-2.007-1.523"/><path d="M2 8.82a15 15 0 0 1 4.177-2.643"/><path d="M22 8.82a15 15 0 0 0-11.288-3.764"/><path d="m2 2 20 20"/></svg><i data-i="trust.1" style="font-style:normal">不申请网络权限</i></span>
+        <span><svg class="i" viewBox="0 0 24 24"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/></svg><i data-i="trust.2" style="font-style:normal">先预览，你点头才动手</i></span>
+        <span><svg class="i" viewBox="0 0 24 24"><path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19.364 18.364a9 9 0 0 0 0-12.728"/></svg><i data-i="trust.3" style="font-style:normal">音量键随时喊停</i></span>
+      </div>
+    </div>
+
+    <div class="stage">
+      <div class="phone" id="phone" role="img" aria-label="手机桌面上的图标自动收进分类文件夹的示意动画">
+        <div class="screen">
+          <div class="cam"></div>
+          <div class="sb"><span>10:00</span><em>88 <i></i></em></div>
+          <div class="pill" id="pill">
+            <div class="row"><span id="pillText"></span><span id="pillCount"></span></div>
+            <div class="bar"><i id="pillBar"></i></div>
+            <div class="hint" id="pillHint"><svg class="i" viewBox="0 0 24 24" style="font-size:12px"><path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z"/><path d="M16 9a5 5 0 0 1 0 6"/></svg><span data-i="demo.hint">按音量键可随时停下</span></div>
+          </div>
+          <div class="grid" id="grid"></div>
+          <div class="dock"><i></i><i></i><i></i><i></i></div>
+          <div class="home-bar"></div>
+        </div>
+      </div>
+      <div class="caption">
+        <span data-i="demo.cap">示意动画 · 图标是占位色块</span>
+        <button type="button" id="replay"><svg class="i" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg><span data-i="demo.replay">再看一遍</span></button>
+      </div>
+    </div>
+  </div>
+
+  <section id="how" class="alt">
+    <div class="wrap">
+      <div class="sec-h">
+        <p class="eyebrow">HOW IT WORKS</p>
+        <h2 data-i="how.h2">三步，不用动手</h2>
+        <p data-i="how.p">借安卓的无障碍服务看见你的桌面，再像手指一样把图标一个个放进文件夹。你只需要看一眼分类、点个头。</p>
+      </div>
+      <div class="steps">
+        <div class="step">
+          <div class="no"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></svg></span><span class="n">01</span></div>
+          <h3 data-i="s1.h">先看一眼桌面</h3>
+          <p data-i="s1.p">读出每一页上有哪些应用、哪些已经是文件夹。只读，不会改动任何东西。</p>
+        </div>
+        <div class="step">
+          <div class="no"><span class="ic"><svg class="i" viewBox="0 0 24 24"><rect width="7" height="7" x="3" y="3" rx="1"/><rect width="7" height="7" x="14" y="3" rx="1"/><rect width="7" height="7" x="14" y="14" rx="1"/><rect width="7" height="7" x="3" y="14" rx="1"/></svg></span><span class="n">02</span></div>
+          <h3 data-i="s2.h">分好类，你来点头</h3>
+          <p data-i="s2.p">自动归类后给你预览：哪个应用放哪一类，点一下就能改；哪一类想保持原样，也可以整类跳过。</p>
+        </div>
+        <div class="step">
+          <div class="no"><span class="ic"><svg class="i" viewBox="0 0 24 24"><path d="M22 14a8 8 0 0 1-8 8"/><path d="M18 11v-1a2 2 0 0 0-2-2a2 2 0 0 0-2 2"/><path d="M14 10V9a2 2 0 0 0-2-2a2 2 0 0 0-2 2v1"/><path d="M10 9.5V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v10"/><path d="M18 11a2 2 0 1 1 4 0v3a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/></svg></span><span class="n">03</span></div>
+          <h3 data-i="s3.h">它替你动手</h3>
+          <p data-i="s3.p">长按、拖动、悬停、松手，一个个收进文件夹。你已有的文件夹不会被拆，同名的会直接放进去。</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="cats">
+    <div class="wrap">
+      <div class="sec-h">
+        <p class="eyebrow">CATEGORIES</p>
+        <h2 data-i="cat.h2">分到这几类</h2>
+        <p data-i="cat.p">内置三百多条常见应用的词典，不靠联网、不靠大模型，所以你的应用列表不会离开手机。</p>
+      </div>
+      <div class="cats">
+        <span class="cat c-social"><svg class="i" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg><i data-i="c.social" style="font-style:normal">社交</i></span>
+        <span class="cat c-shopping"><svg class="i" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg><i data-i="c.shopping" style="font-style:normal">购物</i></span>
+        <span class="cat c-media"><svg class="i" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg><i data-i="c.media" style="font-style:normal">影音</i></span>
+        <span class="cat c-work"><svg class="i" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg><i data-i="c.work" style="font-style:normal">学习办公</i></span>
+        <span class="cat c-travel"><svg class="i" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg><i data-i="c.travel" style="font-style:normal">出行</i></span>
+        <span class="cat c-finance"><svg class="i" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg><i data-i="c.finance" style="font-style:normal">金融</i></span>
+        <span class="cat c-life"><svg class="i" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg><i data-i="c.life" style="font-style:normal">生活服务</i></span>
+        <span class="cat c-game"><svg class="i" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg><i data-i="c.game" style="font-style:normal">游戏</i></span>
+        <span class="cat c-tools"><svg class="i" viewBox="0 0 24 24"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg><i data-i="c.tools" style="font-style:normal">工具</i></span>
+      </div>
+      <p class="cat-note" data-i="cat.note">认不出的、或者某一类只有一个应用的，就留在原地，不乱放。</p>
+    </div>
+  </section>
+
+  <section id="status" class="alt">
+    <div class="wrap">
+      <div class="sec-h">
+        <p class="eyebrow">STATUS</p>
+        <h2 data-i="st.h2">现在做到哪一步了</h2>
+        <p data-i="st.p">它还在开发中。这里如实写清哪些是在真机上验证过的，哪些只是写完了、还没跑通。</p>
+      </div>
+      <div class="status">
+        <div class="col c-social">
+          <span class="tag" data-i="st.a.tag">真机实测通过</span>
+          <ul>
+            <li><span data-i="st.a.1">读取整个桌面</span><small data-i="st.a.1s">一台真机上，10 页桌面读出 54 个应用和 18 个文件夹，一个不漏。</small></li>
+            <li><span data-i="st.a.2">手势拖动合成文件夹</span><small data-i="st.a.2s">用 adb 注入手势实测：把图标拖到另一个图标上合成新文件夹，拖进已有文件夹也成功。</small></li>
+          </ul>
+        </div>
+        <div class="col c-finance">
+          <span class="tag" data-i="st.b.tag">写完了，还没联调</span>
+          <ul>
+            <li><span data-i="st.b.1">App 自己的手势执行</span><small data-i="st.b.1s">用的是上面实测出来的同一组参数，但还没在真机上复现。</small></li>
+            <li><span data-i="st.b.2">跨页拖动</span><small data-i="st.b.2s">拖到屏幕边缘等它翻页，停多久合适还是估计值。</small></li>
+            <li><span data-i="st.b.3">新建文件夹自动改名</span><small data-i="st.b.3s">失败时文件夹保持默认名，不影响整理本身。</small></li>
+            <li><span data-i="st.b.4">进度条与音量键中止</span></li>
+          </ul>
+        </div>
+        <div class="col c-tools">
+          <span class="tag" data-i="st.c.tag">还没做</span>
+          <ul>
+            <li><span data-i="st.c.1">适配其他桌面</span><small data-i="st.c.1s">目前只在 ColorOS 上验证过，其他桌面的结构不一样，要一个个来。</small></li>
+            <li><span data-i="st.c.2">第一个可安装的版本</span><small data-i="st.c.2s">还没有安装包。整套流程在真机上跑通以后，会先放出一个测试版。</small></li>
+          </ul>
+        </div>
+      </div>
+      <p class="device" data-i="st.dev">验证设备：一加 13 · Android 16 · ColorOS 桌面。</p>
+    </div>
+  </section>
+
+  <section id="notes">
+    <div class="wrap">
+      <div class="sec-h">
+        <p class="eyebrow">FIELD NOTES</p>
+        <h2 data-i="nt.h2">真机上踩过的坑</h2>
+        <p data-i="nt.p">做这类工具，文档里写的和真机上发生的往往不一样。这几条是实测出来的。</p>
+      </div>
+      <div class="notes">
+        <article class="note">
+          <span class="k">NOTE 01</span>
+          <div>
+            <h3 data-i="n1.h">原本想走的捷径，在 ColorOS 上走不通</h3>
+            <p data-i="n1.p">安卓给读屏用户留了语义入口，我原本想用「移动项目」→「创建文件夹」一步合成。实测里「移动项目」确实能把图标拎起来，可拎起之后桌面的节点直接变成空的，没有任何落点可选。于是改成模拟手指：长按、拖动、松手。</p>
+          </div>
+        </article>
+        <article class="note">
+          <span class="k">NOTE 02</span>
+          <div>
+            <h3 data-i="n2.h">松手的位置，要落在图案正中心</h3>
+            <p data-i="n2.p">第一次拖，两个图标只是<strong>换了位置</strong>：终点落在了目标图案的上沿，桌面当成"给它让个位置"。图标的节点范围里还包着下面的应用名，所以图案中心不在范围的正中，而在从上往下 48% 的位置。对准这个点、悬停 0.9 秒再松手，才会合成文件夹。</p>
+          </div>
+        </article>
+        <article class="note">
+          <span class="k">NOTE 03</span>
+          <div>
+            <h3 data-i="n3.h">提示卡片飞出了屏幕</h3>
+            <p data-i="n3.p">新手引导的提示卡一直不出现，用户被暗层挡住、点不动。日志里它的位置是 <code>top=3429</code>，而屏幕只有 2780 高。原因是 Kotlin 的 <code>apply</code> 里写的 <code>height</code>，取到的是布局参数自己的高度（<code>-2</code>），不是屏幕高度，底边距算成了负数。</p>
+          </div>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section id="faq" class="alt">
+    <div class="wrap">
+      <div class="sec-h">
+        <p class="eyebrow">FAQ</p>
+        <h2 data-i="fq.h2">常见问题</h2>
+      </div>
+      <div class="faq">
+        <details>
+          <summary><span data-i="q1">为什么要开「无障碍」权限？</span><svg class="i" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></summary>
+          <p class="a" data-i="a1">因为它要"看见"桌面，再"替你操作"。这是安卓里不用 root 就能做到的办法。这个 App 不申请网络权限，读到的内容出不了你的手机。</p>
+        </details>
+        <details>
+          <summary><span data-i="q2">会不会把我现在的桌面弄乱？</span><svg class="i" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></summary>
+          <p class="a" data-i="a2">已有的文件夹不拆、不改名；整理之前有预览，你点头才动手；执行时按任意音量键，它立刻停手。不过它没法一键撤销，所以会提醒你整理前先给每一页桌面截个图。</p>
+        </details>
+        <details>
+          <summary><span data-i="q3">我的手机能用吗？</span><svg class="i" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></summary>
+          <p class="a" data-i="a3">目前只在一加 13 的 ColorOS 桌面上验证过。别的桌面（原生、小米、华为等）节点结构不同，需要逐个适配，所以现在先不承诺。</p>
+        </details>
+        <details>
+          <summary><span data-i="q4">什么时候能下载？</span><svg class="i" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></summary>
+          <p class="a" data-i="a4">还没有安装包。App 里的整套流程在真机上跑通之后，会先放出第一个测试版本，不给具体日期。</p>
+        </details>
+        <details>
+          <summary><span data-i="q5">它开源吗？</span><svg class="i" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg></summary>
+          <p class="a" data-i="a5">已经开源，MIT 协议。源码在 <a href="https://github.com/arvelvale/tidyhome">github.com/arvelvale/tidyhome</a>，里面有产品设计、决策记录和每一次实测的结论。</p>
+        </details>
+      </div>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span data-i="ft.l">一键理桌 · 一个还在路上的开源小工具</span>
+    <a href="https://github.com/arvelvale/tidyhome" data-i="ft.src">源码</a>
+    <a href="https://arvelvale.github.io/" data-i="ft.blog">作者的博客</a>
+    <a id="back" href="../zh/projects/" data-i="ft.back">返回作品集</a>
+    <span class="sp" data-i="ft.r">本页不使用 Cookie、统计和第三方请求。</span>
+  </div>
+</footer>
+
+<script>
+/* ---------- 文案：中文直接写在上面的 HTML 里，英文在这里 ---------- */
+const EN = {
+  'nav.how': 'How it works', 'nav.status': 'Status', 'nav.notes': 'Field notes', 'nav.faq': 'FAQ',
+  'hero.badge': 'In development · key moves proven on a OnePlus 13 / ColorOS',
+  'hero.h1': 'A messy home screen,<br />tidied in one tap.',
+  'hero.lead': 'TidyHome sorts the scattered icons on your Android home screen into category folders. No new launcher, fully offline, and you can stop it any time.',
+  'hero.cta1': 'See how it works', 'hero.cta2': 'Where it stands',
+  'trust.1': 'No network permission', 'trust.2': 'Preview first, then it moves', 'trust.3': 'Volume key stops it',
+  'demo.hint': 'Press a volume key to stop', 'demo.cap': 'Illustration · icons are placeholders', 'demo.replay': 'Replay',
+  'how.h2': 'Three steps, hands off',
+  'how.p': 'It uses Android’s accessibility service to see your home screen, then moves icons into folders the way a finger would. You just glance at the sorting and nod.',
+  's1.h': 'Look at the home screen', 's1.p': 'Reads which apps and folders are on each page. Read-only; nothing changes.',
+  's2.h': 'Sort it, you approve', 's2.p': 'Sorts automatically, then shows a preview. Tap any app to change its category, or skip a whole category.',
+  's3.h': 'It does the moving', 's3.p': 'Long-press, drag, hover, release — one icon at a time. Existing folders are never taken apart, and a folder with a matching name is reused.',
+  'cat.h2': 'Where things go',
+  'cat.p': 'A built-in dictionary of 300+ common apps. No network, no language model, so your app list never leaves the phone.',
+  'c.social': 'Social', 'c.shopping': 'Shopping', 'c.media': 'Media', 'c.work': 'Study & work', 'c.travel': 'Travel',
+  'c.finance': 'Finance', 'c.life': 'Daily life', 'c.game': 'Games', 'c.tools': 'Tools',
+  'cat.note': 'Anything it can’t place, or a category with just one app, stays where it is.',
+  'st.h2': 'Where it stands',
+  'st.p': 'It’s still in development. Here is what has been verified on a real phone, and what is only written.',
+  'st.a.tag': 'Verified on a phone', 'st.a.1': 'Reading the whole home screen',
+  'st.a.1s': 'On one phone: 10 pages, 54 apps and 18 folders read, none missed.',
+  'st.a.2': 'Gesture drag that makes folders',
+  'st.a.2s': 'Tested with gestures injected over adb: dragging an icon onto another makes a new folder, and dragging into an existing folder works too.',
+  'st.b.tag': 'Written, not yet integrated', 'st.b.1': 'The app’s own gesture runner',
+  'st.b.1s': 'Uses the same parameters found above, but hasn’t been reproduced on the phone yet.',
+  'st.b.2': 'Cross-page drag', 'st.b.2s': 'Drag to the screen edge and wait for the page to turn; how long to wait is still a guess.',
+  'st.b.3': 'Auto-renaming new folders', 'st.b.3s': 'If it fails the folder keeps its default name; sorting is unaffected.',
+  'st.b.4': 'Progress pill and volume-key stop',
+  'st.c.tag': 'Not started', 'st.c.1': 'Other launchers',
+  'st.c.1s': 'Only ColorOS has been checked; other launchers are structured differently and need one-by-one work.',
+  'st.c.2': 'A first installable build', 'st.c.2s': 'There is no APK yet. A test build comes once the whole flow runs on the phone.',
+  'st.dev': 'Test device: OnePlus 13 · Android 16 · ColorOS launcher.',
+  'nt.h2': 'Lessons from the real phone',
+  'nt.p': 'With tools like this, what the docs say and what the phone does often differ. These were found by testing.',
+  'n1.h': 'The shortcut I wanted doesn’t work on ColorOS',
+  'n1.p': 'Android gives screen-reader users semantic actions, and I meant to use “Move item” → “Create folder” in one go. In testing, “Move item” does pick the icon up, but then the launcher’s node tree goes empty, with nowhere to drop. So it simulates a finger instead: long-press, drag, release.',
+  'n2.h': 'Release right on the icon’s centre',
+  'n2.p': 'The first drag only <strong>swapped</strong> two icons: it ended on the target’s upper edge, which the launcher reads as “make room”. An icon’s node bounds also wrap the app name below it, so the icon’s centre sits at 48% of the bounds, not the middle. Aiming at that point and hovering 0.9 s before release is what makes a folder.',
+  'n3.h': 'The tour card flew off screen',
+  'n3.p': 'The onboarding card never appeared, and the dim layer blocked every tap. The log put it at <code>top=3429</code> on a 2780px screen. Inside a Kotlin <code>apply</code>, <code>height</code> resolved to the layout params’ own height (<code>-2</code>), not the screen’s, so the bottom margin went negative.',
+  'fq.h2': 'FAQ',
+  'q1': 'Why does it need the Accessibility permission?',
+  'a1': 'Because it has to see the home screen and then act on it. That’s the way to do it on Android without root. The app requests no network permission, so what it reads can’t leave your phone.',
+  'q2': 'Could it mess up my current home screen?',
+  'a2': 'Existing folders are never taken apart or renamed. There’s a preview and it only moves after you agree, and any volume key stops it instantly. There is no one-tap undo though, so it reminds you to screenshot every page first.',
+  'q3': 'Will it work on my phone?',
+  'a3': 'So far only on the ColorOS launcher of a OnePlus 13. Other launchers (stock, Xiaomi, Huawei…) are built differently and need adapting one by one, so no promises yet.',
+  'q4': 'When can I download it?',
+  'a4': 'There’s no installer yet. A first test build will come once the whole flow runs on a real phone. No date.',
+  'q5': 'Is it open source?',
+  'a5': 'Yes, MIT licensed. The source is at <a href="https://github.com/arvelvale/tidyhome">github.com/arvelvale/tidyhome</a>, with the product design, decision records and the result of every real-phone test.',
+  'ft.l': 'TidyHome · a small open-source tool still on its way', 'ft.src': 'Source', 'ft.blog': 'Author’s blog', 'ft.back': 'Back to projects',
+  'ft.r': 'No cookies, analytics or third-party requests on this page.',
+};
+const ZH = {};
+const els = [...document.querySelectorAll('[data-i]')];
+els.forEach((el) => { ZH[el.dataset.i] = el.innerHTML; });
+
+/* ---------- 手机示意：图标自己收进文件夹 ---------- */
+const GROUPS = [
+  { id: 'social',   h: 150, zh: '社交',     en: 'Social',   apps: [['聊天', 'Chat'], ['圈子', 'Circles'], ['笔友', 'Pen pals']],  slots: [2, 9, 4] },
+  { id: 'shopping', h: 45,  zh: '购物',     en: 'Shopping', apps: [['商城', 'Mall'], ['二手', 'Resale'], ['团购', 'Deals']],      slots: [0, 5, 13] },
+  { id: 'media',    h: 355, zh: '影音',     en: 'Media',    apps: [['短视频', 'Shorts'], ['音乐', 'Music'], ['追剧', 'Series']],  slots: [3, 14, 8] },
+  { id: 'work',     h: 250, zh: '学习办公', en: 'Work',     apps: [['文档', 'Docs'], ['日程', 'Agenda'], ['邮箱', 'Mail']],       slots: [1, 6, 11] },
+];
+const SOLOS = [{ h: 205, zh: '地图', en: 'Maps', slot: 7 }, { h: 85, zh: '钱包', en: 'Wallet', slot: 12 }];
+const CELL_W = 70, ROW_H = 84, TOP = 122, T = 46, MINI = 17;   // TOP 给顶部进度条留位（它约占 36–108px）
+const cell = (slot) => ({ x: (slot % 4) * CELL_W + (CELL_W - T) / 2, y: TOP + Math.floor(slot / 4) * ROW_H });
+const place = (el, x, y, s = 1) => { el.style.transform = `translate(${x}px, ${y}px) scale(${s})`; };
+const miniPos = (slot, k) => {
+  const c = cell(slot), pad = 6, g = 4;
+  return { x: c.x - 2 + pad + (k % 2) * (MINI + g), y: c.y - 2 + pad + Math.floor(k / 2) * (MINI + g) };
+};
+
+const grid = document.getElementById('grid');
+const pill = document.getElementById('pill'), pillText = document.getElementById('pillText');
+const pillCount = document.getElementById('pillCount'), pillBar = document.getElementById('pillBar');
+const phone = document.getElementById('phone');
+const lang = () => window.TIDY_LANG;
+const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+let token = 0, visible = true;
+
+const sleep = (ms, my) => new Promise((res, rej) => {
+  const tick = () => { if (my !== token) return rej('cancel'); if (!visible || document.hidden) return setTimeout(tick, 200); res(); };
+  setTimeout(tick, ms);
+});
+
+function build() {
+  grid.innerHTML = '';
+  const L = lang();
+  const nameOf = (a) => (L === 'zh' ? a[0] : a[1]);
+  const glyph = (s) => (L === 'zh' ? [...s][0] : s[0].toUpperCase());
+  const model = { groups: [], solos: [] };
+  GROUPS.forEach((g) => {
+    const shell = Object.assign(document.createElement('div'), { className: 'f' });
+    const label = Object.assign(document.createElement('div'), { className: 'fl', textContent: L === 'zh' ? g.zh : g.en });
+    const c = cell(g.slots[0]);
+    place(shell, c.x - 2, c.y - 2); place(label, c.x - 12, c.y + 54);
+    grid.append(shell, label);
+    const tiles = g.apps.map((a, k) => {
+      const t = document.createElement('div'); t.className = 't'; t.style.setProperty('--h', g.h);
+      t.innerHTML = `<i>${glyph(a[L === 'zh' ? 0 : 1])}</i><b>${nameOf(a)}</b>`;
+      const p = cell(g.slots[k]); place(t, p.x, p.y);
+      grid.append(t); return t;
+    });
+    model.groups.push({ g, shell, label, tiles });
+  });
+  SOLOS.forEach((s) => {
+    const t = document.createElement('div'); t.className = 't'; t.style.setProperty('--h', s.h);
+    t.innerHTML = `<i>${L === 'zh' ? [...s.zh][0] : s.en[0]}</i><b>${L === 'zh' ? s.zh : s.en}</b>`;
+    const p = cell(s.slot); place(t, p.x, p.y); grid.append(t); model.solos.push(t);
+  });
+  pill.className = 'pill'; pillBar.style.width = '0';
+  phone.classList.remove('stoppable');
+  return model;
+}
+
+function fold(m, gi, upto) {           // 把第 gi 组的前 upto 个图标收进文件夹（瞬间完成，用于静态终态）
+  const { g, shell, label, tiles } = m.groups[gi];
+  shell.classList.add('on'); label.classList.add('on');
+  for (let k = 0; k < upto; k++) { const p = miniPos(g.slots[0], k); place(tiles[k], p.x, p.y, MINI / T); tiles[k].classList.add('mini'); }
+}
+function showFinal() {
+  const m = build();
+  m.groups.forEach((_, i) => fold(m, i, 3));
+  pill.className = 'pill on done';
+  pillText.textContent = lang() === 'zh' ? '理好了 · 4 个文件夹' : 'All tidy · 4 folders';
+  pillCount.textContent = '8/8'; pillBar.style.width = '100%';
+  document.getElementById('pillHint').hidden = true;
+}
+
+async function play() {
+  const my = ++token;
+  try {
+    const m = build(); const L = lang();
+    document.getElementById('pillHint').hidden = false;
+    await sleep(1500, my);
+    pill.classList.add('on'); phone.classList.add('stoppable');
+    const total = 8; let done = 0;
+    const say = (n, gname) => {
+      pillText.textContent = L === 'zh' ? `正在把「${n}」放进「${gname}」` : `Moving "${n}" into "${gname}"`;
+      pillCount.textContent = `${done}/${total}`; pillBar.style.width = `${(done / total) * 100}%`;
+    };
+    for (let gi = 0; gi < m.groups.length; gi++) {
+      const { g, shell, label, tiles } = m.groups[gi];
+      const gname = L === 'zh' ? g.zh : g.en;
+      const a0 = cell(g.slots[0]);
+      // 第 1 步：第二个图标拖到锚点上，两个一起收成新文件夹
+      say(L === 'zh' ? g.apps[1][0] : g.apps[1][1], gname);
+      tiles[1].classList.add('over'); place(tiles[1], a0.x, a0.y); await sleep(700, my);
+      shell.classList.add('on'); label.classList.add('on');
+      [0, 1].forEach((k) => { const p = miniPos(g.slots[0], k); place(tiles[k], p.x, p.y, MINI / T); tiles[k].classList.add('mini'); tiles[k].classList.remove('over'); });
+      done++; pillCount.textContent = `${done}/${total}`; pillBar.style.width = `${(done / total) * 100}%`;
+      await sleep(650, my);
+      // 第 2 步：第三个图标直接进文件夹
+      say(L === 'zh' ? g.apps[2][0] : g.apps[2][1], gname);
+      tiles[2].classList.add('over'); const p2 = miniPos(g.slots[0], 2);
+      place(tiles[2], p2.x, p2.y, MINI / T); await sleep(700, my);
+      tiles[2].classList.add('mini'); tiles[2].classList.remove('over');
+      done++; pillCount.textContent = `${done}/${total}`; pillBar.style.width = `${(done / total) * 100}%`;
+      await sleep(450, my);
+    }
+    pill.classList.add('done'); phone.classList.remove('stoppable');
+    pillText.textContent = L === 'zh' ? '理好了 · 4 个文件夹' : 'All tidy · 4 folders';
+    document.getElementById('pillHint').hidden = true;
+    await sleep(4200, my);
+    play();
+  } catch (e) { if (e !== 'cancel') throw e; }
+}
+
+/* ---------- 语言 ---------- */
+function applyLang(L) {
+  window.TIDY_LANG = L;
+  document.documentElement.lang = L === 'zh' ? 'zh-CN' : 'en';
+  els.forEach((el) => { el.innerHTML = L === 'zh' ? ZH[el.dataset.i] : (EN[el.dataset.i] ?? ZH[el.dataset.i]); });
+  document.title = L === 'zh' ? '一键理桌 — 桌面乱了，就交给我' : 'TidyHome — tidy your Android home screen in one tap';
+  document.querySelector('meta[name="description"]').content = L === 'zh'
+    ? '一键把安卓桌面上散乱的图标，按类别收进文件夹。不换桌面，全程离线，随时能喊停。开发中，已在一加 13 / ColorOS 上跑通关键动作。'
+    : 'Sorts the scattered icons on your Android home screen into category folders. No new launcher, fully offline, stoppable any time. In development; key moves proven on a OnePlus 13 / ColorOS.';
+  phone.setAttribute('aria-label', L === 'zh' ? '手机桌面上的图标自动收进分类文件夹的示意动画' : 'Illustration: icons on a phone home screen sort themselves into category folders');
+  document.getElementById('back').href = L === 'zh' ? '../zh/projects/' : '../en/projects/';   // 博客 prefixDefaultLocale: true
+  document.querySelectorAll('.lang button').forEach((b) => b.setAttribute('aria-pressed', String(b.dataset.lang === L)));
+  try { localStorage.setItem('tidyhome.lang', L); } catch {}
+  token++;                                   // 取消正在播放的动画
+  reduce ? showFinal() : play();
+}
+document.querySelectorAll('.lang button').forEach((b) => b.addEventListener('click', () => applyLang(b.dataset.lang)));
+document.getElementById('replay').addEventListener('click', () => play());
+
+/* 不在视口里就暂停，省电 */
+new IntersectionObserver((es) => { visible = es[0].isIntersecting; }, { threshold: 0.1 }).observe(phone);
+const nav = document.getElementById('nav');
+addEventListener('scroll', () => nav.classList.toggle('scrolled', scrollY > 8), { passive: true });
+
+applyLang(window.TIDY_LANG);
+</script>
+</body>
+</html>

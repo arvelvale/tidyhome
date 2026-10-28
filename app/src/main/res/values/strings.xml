@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">一键理桌</string>
+    <string name="accessibility_description">用于读取并整理桌面上的图标，把它们归进文件夹。不会收集、保存或上传任何数据。</string>
+</resources>

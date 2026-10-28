@@ -1,0 +1,765 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>一键理桌 交互原型</title>
+<!--
+  设计假设（v1.1，待产品负责人确认）
+  - 对标：苹果设置页的清晰层级 + 主流手机 App 的白底；轻 > 重
+  - 色彩：白底 + 可切换主色（珊瑚 / 钴蓝 / 青碧）+ 每个分类一个浅色（承载"这是哪一类"）；不用渐变、不用紫
+    v1 的暖纸底 + 苔绿被产品负责人否掉："太常见"，希望白底为主、多搭点颜色
+  - 字体：标题 Noto Serif SC 500/600（温柔不粗硬），正文系统黑体
+  - 图标：lucide 线性图标，stroke 1.75；不用 emoji
+  - 应用图标：诚实占位（色块 + 首字）。真机版直接用系统读到的应用图标
+  - 机型：一加 13 / ColorOS 16（产品负责人真机），时间 10:00、电量 88% 取自他的截图
+-->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@500;600&family=Noto+Sans+SC:wght@400;500&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+<style>
+  :root {
+    /* v1.1：白底为主；颜色来自"主色 + 分类色"，分类色承载信息（哪个文件夹是哪类） */
+    --page: oklch(0.965 0.004 260);
+    --paper: #ffffff;
+    --card: oklch(0.972 0.004 260);
+    --ink: oklch(0.25 0.012 260);
+    --ink2: oklch(0.5 0.012 260);
+    --ink3: oklch(0.66 0.01 260);
+    --line: oklch(0.92 0.005 260);
+    --amber: oklch(0.74 0.14 70);
+    --serif: "Noto Serif SC", "Songti SC", serif;
+    --sans: "PingFang SC", "HarmonyOS Sans SC", "Noto Sans SC", system-ui, sans-serif;
+  }
+  /* 三套可切换主色（页面顶部切换）。hue 写在一处，其余派生 */
+  /* 2026-10-24 产品负责人选定钴蓝为主色；另两套保留作对比 */
+  :root, :root[data-palette="cobalt"] { --h: 252; --c: 0.15; }
+  :root[data-palette="coral"] { --h: 32; --c: 0.16; }
+  :root[data-palette="teal"] { --h: 192; --c: 0.105; }
+  /* 桌面壁纸用中性深石板色：模拟用户自己的壁纸，不跟主色走 */
+  :root { --wall: oklch(0.31 0.025 255); }
+  :root {
+    --pri: oklch(0.63 var(--c) var(--h));
+    --pri-deep: oklch(0.5 var(--c) var(--h));
+    --pri-soft: oklch(0.955 0.03 var(--h));
+    --pri-light: oklch(0.86 0.09 var(--h));
+    --pri-glow: oklch(0.7 var(--c) var(--h) / .45);
+    --pri-dis: oklch(0.87 0.04 var(--h));
+    --serif: "Noto Serif SC", "Songti SC", serif;
+    --sans: "PingFang SC", "HarmonyOS Sans SC", "Noto Sans SC", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--page); color: var(--ink); font-family: var(--sans); -webkit-font-smoothing: antialiased; }
+  button { font: inherit; color: inherit; border: 0; background: none; padding: 0; cursor: pointer; }
+  .page-head { max-width: 1180px; margin: 0 auto; padding: 48px 32px 8px; }
+  .page-head h1 { font-family: var(--serif); font-weight: 600; font-size: 30px; margin: 0 0 10px; letter-spacing: .02em; }
+  .page-head p { margin: 0; color: var(--ink2); font-size: 14px; line-height: 1.8; max-width: 720px; text-wrap: pretty; }
+  .stage { display: flex; flex-wrap: wrap; gap: 44px 40px; padding: 36px 32px 72px; justify-content: center; align-items: flex-start; }
+  .phone-label { display: flex; justify-content: space-between; align-items: baseline; font-size: 13px; color: var(--ink2); font-style: italic; margin: 0 6px 12px; }
+  .phone-label button { font-style: normal; font-size: 12px; color: var(--pri); }
+  .phone-label button:hover { text-decoration: underline; }
+
+  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 var(--pri-glow); } 50% { box-shadow: 0 0 0 8px transparent; } }
+  @keyframes sweep { 0% { transform: translateY(-10%); opacity: 0; } 10% { opacity: 1; } 90% { opacity: 1; } 100% { transform: translateY(560%); opacity: 0; } }
+  @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+  @keyframes sheetUp { from { transform: translateY(100%); } to { transform: none; } }
+  @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+  .fade-up { animation: fadeUp .45s cubic-bezier(.2,.7,.2,1) both; }
+  .tap { transition: transform .12s ease, background .2s ease, opacity .2s ease; }
+  .tap:active { transform: scale(.97); }
+  .stage * { scrollbar-width: none; }
+  .stage *::-webkit-scrollbar { display: none; }
+</style>
+</head>
+<body>
+<div class="page-head">
+  <h1>一键理桌 · 交互原型 v1.1</h1>
+  <p>五台手机各自可以点。第一台是第一次打开 App 时的聚焦引导；第四台会自动演示整理过程，点机身右侧的<b>音量键</b>能让它停下。应用图标是占位色块，真机版会显示系统读到的真实图标。</p>
+</div>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useLayoutEffect, useRef } = React;
+
+/* ------------------------------------------------------------ 数据 */
+// 分类色：每类一个色相，浅底 + 深字。颜色承载"这是哪一类"，不是装饰
+const CATS = [
+  { id: 'social', name: '社交', h: 150, c: 1 }, { id: 'shopping', name: '购物', h: 45, c: 1 }, { id: 'media', name: '影音', h: 355, c: 1 },
+  { id: 'work', name: '学习办公', h: 250, c: 1 }, { id: 'travel', name: '出行', h: 205, c: 1 }, { id: 'finance', name: '金融', h: 85, c: 1 },
+  { id: 'life', name: '生活服务', h: 125, c: .9 }, { id: 'game', name: '游戏', h: 300, c: .9 }, { id: 'tools', name: '工具', h: 260, c: .15 },
+  { id: 'other', name: '其他', h: 260, c: 0 },
+];
+const catOf = (id) => CATS.find((c) => c.id === id);
+const catName = (id) => catOf(id).name;
+const catBg = (id) => { const c = catOf(id); return `oklch(0.968 ${0.024 * c.c} ${c.h})`; };
+const catInk = (id) => { const c = catOf(id); return `oklch(0.48 ${0.12 * c.c} ${c.h})`; };
+const APPS = [
+  ['微信', 'social'], ['QQ', 'social'], ['小红书', 'social'], ['淘宝', 'shopping'], ['京东', 'shopping'],
+  ['闲鱼', 'shopping'], ['抖音', 'media'], ['哔哩哔哩', 'media'], ['网易云音乐', 'media'], ['钉钉', 'work'],
+  ['飞书', 'work'], ['知乎', 'work'], ['高德地图', 'travel'], ['12306', 'travel'], ['支付宝', 'finance'],
+  ['招商银行', 'finance'], ['美团', 'life'], ['大众点评', 'life'], ['王者荣耀', 'game'], ['原神', 'game'],
+  ['相机', 'tools'], ['计算器', 'tools'], ['小鹿日记', 'other'], ['Sigma', 'other'],
+].map(([name, cat], i) => ({ id: 'a' + i, name, cat }));
+// 整理前桌面的"乱序"（固定，便于复现）
+const MESSY = [6, 14, 0, 20, 9, 3, 16, 22, 12, 1, 18, 7, 10, 4, 21, 15, 2, 13, 8, 23, 17, 5, 19, 11];
+const SEC_PER_MOVE = 1.5; // 真机实测前的估计值：每移动一个图标约 1.5 秒
+
+function hueOf(name) { let h = 0; for (const c of name) h = (h * 31 + c.charCodeAt(0)) % 360; return h; }
+const glyph = (n) => (/^[0-9]/.test(n) ? n.slice(0, 2) : n[0]);
+
+/* ------------------------------------------------------------ lucide 图标 */
+const ICONS = {
+  check: <path d="M20 6 9 17l-5-5" />,
+  chevronRight: <path d="m9 18 6-6-6-6" />,
+  arrowLeft: <><path d="m12 19-7-7 7-7" /><path d="M19 12H5" /></>,
+  shield: <><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" /><path d="m9 12 2 2 4-4" /></>,
+  camera: <><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z" /><circle cx="12" cy="13" r="3" /></>,
+  volume: <><path d="M11 4.702a.705.705 0 0 0-1.203-.498L6.413 7.587A1.4 1.4 0 0 1 5.416 8H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.416a1.4 1.4 0 0 1 .997.413l3.383 3.384A.705.705 0 0 0 11 19.298z" /><path d="M16 9a5 5 0 0 1 0 6" /><path d="M19.364 18.364a9 9 0 0 0 0-12.728" /></>,
+  handOff: <><path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2" /><path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2" /><path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8" /><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15" /></>,
+  wifiOff: <><path d="M12 20h.01" /><path d="M8.5 16.429a5 5 0 0 1 7 0" /><path d="M5 12.859a10 10 0 0 1 5.17-2.69" /><path d="M19 12.859a10 10 0 0 0-2.007-1.523" /><path d="M2 8.82a15 15 0 0 1 4.177-2.643" /><path d="M22 8.82a15 15 0 0 0-11.288-3.764" /><path d="m2 2 20 20" /></>,
+  folder: <path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />,
+  more: <><circle cx="12" cy="5" r="1" /><circle cx="12" cy="12" r="1" /><circle cx="12" cy="19" r="1" /></>,
+};
+function Icon({ name, size = 18, color = 'currentColor', sw = 1.75, style }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={sw}
+      strokeLinecap="round" strokeLinejoin="round" style={{ flex: 'none', ...style }}>{ICONS[name]}</svg>
+  );
+}
+
+/* ------------------------------------------------------------ 机框（改自 android_frame.jsx，加了侧键） */
+const W = 390, H = 844, TOP = 32, BOTTOM = 24;
+const VOL = { top: 196, height: 96 }; // 音量键在机身右侧的位置（相对机框外壳）
+function PhoneFrame({ children, dark, volHot, onVolume }) {
+  const fg = dark ? '#fff' : 'var(--ink)';
+  return (
+    <div style={{ position: 'relative', display: 'inline-block', padding: 10, background: '#1c1c1c', borderRadius: 48,
+      boxShadow: '0 0 0 2px #2c2c2c, 0 24px 60px rgba(40,30,10,.18)' }}>
+      {/* 电源键 */}
+      <div style={{ position: 'absolute', right: -4, top: 320, width: 4, height: 64, borderRadius: '0 3px 3px 0', background: '#2a2a2a' }} />
+      {/* 音量键（可点：模拟按下音量键） */}
+      <button onClick={onVolume} title="音量键" style={{ position: 'absolute', right: -5, top: VOL.top, width: 5, height: VOL.height,
+        borderRadius: '0 3px 3px 0', background: volHot ? 'var(--pri)' : '#2a2a2a', zIndex: 5,
+        animation: volHot ? 'pulse 1.6s ease-in-out infinite' : 'none' }} />
+      <div style={{ position: 'relative', width: W, height: H, borderRadius: 38, overflow: 'hidden',
+        background: dark ? 'var(--wall)' : 'var(--paper)', transition: 'background .5s ease' }}>
+        <div style={{ position: 'absolute', top: 0, left: 0, right: 0, height: TOP, display: 'flex', alignItems: 'center',
+          justifyContent: 'space-between', padding: '0 26px', fontSize: 13, fontWeight: 500, color: fg, zIndex: 40, pointerEvents: 'none' }}>
+          <span>10:00</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <svg width="14" height="10" viewBox="0 0 14 10" fill="currentColor"><rect x="0" y="6" width="2" height="4" rx=".5" /><rect x="4" y="4" width="2" height="6" rx=".5" /><rect x="8" y="2" width="2" height="8" rx=".5" /><rect x="12" y="0" width="2" height="10" rx=".5" /></svg>
+            <span style={{ width: 22, height: 10, border: '1.5px solid currentColor', borderRadius: 3, padding: 1, display: 'inline-block' }}>
+              <span style={{ display: 'block', width: '88%', height: '100%', background: 'currentColor', borderRadius: 1 }} />
+            </span>
+            <span style={{ fontSize: 11 }}>88</span>
+          </span>
+        </div>
+        <div style={{ position: 'absolute', top: 10, left: '50%', transform: 'translateX(-50%)', width: 13, height: 13, background: '#000', borderRadius: '50%', zIndex: 41 }} />
+        <div style={{ position: 'absolute', top: TOP, left: 0, right: 0, bottom: BOTTOM }}>{children}</div>
+        <div style={{ position: 'absolute', bottom: 9, left: '50%', transform: 'translateX(-50%)', width: 108, height: 4, borderRadius: 9,
+          background: dark ? 'rgba(255,255,255,.55)' : 'rgba(0,0,0,.35)', zIndex: 40 }} />
+      </div>
+    </div>
+  );
+}
+const CH = H - TOP - BOTTOM; // 内容区高度
+
+/* ------------------------------------------------------------ 通用小部件 */
+function AppTile({ name, size = 46, radius }) {
+  const h = hueOf(name);
+  return (
+    <div style={{ width: size, height: size, borderRadius: radius ?? size * 0.28, background: `oklch(0.88 0.055 ${h})`,
+      color: `oklch(0.36 0.07 ${h})`, display: 'grid', placeItems: 'center', fontSize: size * (glyph(name).length > 1 ? 0.3 : 0.4),
+      fontWeight: 500, flex: 'none' }}>{glyph(name)}</div>
+  );
+}
+function PrimaryBtn({ children, onClick, innerRef, disabled, style }) {
+  return (
+    <button ref={innerRef} onClick={onClick} className="tap" style={{ width: '100%', height: 54, borderRadius: 27,
+      background: disabled ? 'var(--pri-dis)' : 'var(--pri)', color: '#fff', fontSize: 16, fontWeight: 500,
+      letterSpacing: '.04em', ...style }}>{children}</button>
+  );
+}
+function GhostBtn({ children, onClick, style }) {
+  return (
+    <button onClick={onClick} className="tap" style={{ width: '100%', height: 50, borderRadius: 25, color: 'var(--ink2)',
+      fontSize: 15, ...style }}>{children}</button>
+  );
+}
+function TopBar({ title, onBack }) {
+  return (
+    <div style={{ height: 52, display: 'flex', alignItems: 'center', gap: 6, padding: '0 12px' }}>
+      <button onClick={onBack} className="tap" style={{ width: 40, height: 40, display: 'grid', placeItems: 'center', borderRadius: 20 }}>
+        <Icon name="arrowLeft" size={22} />
+      </button>
+      <span style={{ fontSize: 17, fontWeight: 500 }}>{title}</span>
+    </div>
+  );
+}
+function Toast({ text }) {
+  if (!text) return null;
+  return (
+    <div className="fade-up" style={{ position: 'absolute', left: '50%', bottom: 96, transform: 'translateX(-50%)', zIndex: 80,
+      background: 'oklch(0.27 0.014 60 / .92)', color: '#fff', fontSize: 14, padding: '11px 20px', borderRadius: 22, whiteSpace: 'nowrap' }}>{text}</div>
+  );
+}
+function Sheet({ children, onClose }) {
+  return (
+    <div style={{ position: 'absolute', inset: 0, zIndex: 70 }}>
+      <div onClick={onClose} style={{ position: 'absolute', inset: 0, background: 'rgba(25,20,12,.38)', animation: 'fadeIn .25s ease both' }} />
+      <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, background: 'var(--card)', borderRadius: '26px 26px 0 0',
+        padding: '10px 22px 28px', animation: 'sheetUp .32s cubic-bezier(.2,.8,.2,1) both' }}>
+        <div style={{ width: 36, height: 4, borderRadius: 2, background: 'var(--line)', margin: '0 auto 18px' }} />
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ 聚焦式新手引导 */
+const TOUR = [
+  { target: 'perm', title: '先开启权限', body: '我需要无障碍权限，才能看见并移动桌面上的图标。全程离线，不收集任何数据。' },
+  { target: 'scan', title: '再扫描一下', body: '扫描只是读取，不会改动桌面。分好类、你点头之后，才会真正开始整理。' },
+  { target: 'volume', title: '随时可以喊停', body: '整理的时候按一下任一音量键，我会立刻停手，桌面保持停下那一刻的样子。' },
+];
+function Spotlight({ step, rects, onNext, onSkip }) {
+  const s = TOUR[step];
+  const r = rects[s.target];
+  const pad = 8;
+  const hole = r ? { left: r.x - pad, top: r.y - pad, width: r.w + pad * 2, height: r.h + pad * 2 }
+                 : { left: W + 40, top: VOL.top - TOP, width: 0, height: 0 }; // 指向机身外：整屏压暗
+  const below = r && r.y + r.h / 2 < CH * 0.5;
+  const tipStyle = !r
+    ? { right: 18, top: VOL.top - TOP - 64 }
+    : below ? { left: 18, right: 18, top: hole.top + hole.height + 16 } : { left: 18, right: 18, bottom: CH - hole.top + 16 };
+  return (
+    <div style={{ position: 'absolute', inset: 0, zIndex: 60 }}>
+      <div style={{ position: 'absolute', ...hole, borderRadius: 22, boxShadow: '0 0 0 2000px rgba(24,20,14,.62)',
+        transition: 'all .45s cubic-bezier(.2,.8,.2,1)', pointerEvents: 'none' }}>
+        {r && <div style={{ position: 'absolute', inset: -1, borderRadius: 22, border: '1.5px solid var(--pri-light)' }} />}
+      </div>
+      <div key={step} className="fade-up" style={{ position: 'absolute', ...tipStyle, width: r ? 'auto' : 268, background: 'var(--card)',
+        borderRadius: 20, padding: '18px 18px 14px', boxShadow: '0 12px 40px rgba(0,0,0,.18)' }}>
+        {!r && <div style={{ position: 'absolute', right: -7, top: 80, width: 14, height: 14, background: 'var(--card)', transform: 'rotate(45deg)' }} />}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+          {!r && <Icon name="volume" size={18} color="var(--pri)" />}
+          <span style={{ fontFamily: 'var(--serif)', fontWeight: 600, fontSize: 18 }}>{s.title}</span>
+        </div>
+        <div style={{ fontSize: 14, lineHeight: 1.7, color: 'var(--ink2)', textWrap: 'pretty' }}>{s.body}</div>
+        <div style={{ display: 'flex', alignItems: 'center', marginTop: 14 }}>
+          <div style={{ display: 'flex', gap: 5, flex: 1 }}>
+            {TOUR.map((_, i) => <span key={i} style={{ width: i === step ? 16 : 6, height: 6, borderRadius: 3,
+              background: i === step ? 'var(--pri)' : 'var(--line)', transition: 'all .3s ease' }} />)}
+          </div>
+          {step < TOUR.length - 1 && <button onClick={onSkip} style={{ fontSize: 13, color: 'var(--ink3)', padding: '8px 12px' }}>跳过</button>}
+          <button onClick={onNext} className="tap" style={{ fontSize: 14, fontWeight: 500, color: '#fff', background: 'var(--pri)',
+            padding: '8px 18px', borderRadius: 18 }}>{step < TOUR.length - 1 ? '下一步' : '知道了'}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ 屏幕：首页 */
+function HomeScreen({ granted, onPerm, onScan, permRef, scanRef }) {
+  return (
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', padding: '0 22px 26px' }}>
+      <div style={{ paddingTop: 34, fontSize: 13, color: 'var(--ink3)', letterSpacing: '.12em' }}>一键理桌</div>
+      <h2 style={{ fontFamily: 'var(--serif)', fontWeight: 600, fontSize: 34, lineHeight: 1.35, margin: '14px 0 12px', letterSpacing: '.02em' }}>
+        桌面乱了，<br />就交给我。
+      </h2>
+      <p style={{ margin: 0, fontSize: 15, lineHeight: 1.75, color: 'var(--ink2)', textWrap: 'pretty' }}>
+        按类别把图标收进文件夹，一分钟左右就好。
+      </p>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginTop: 10, fontSize: 13, color: 'var(--ink3)' }}>
+        <Icon name="wifiOff" size={14} /> 全程离线，不联网
+      </div>
+      {/* 预告会建出哪些文件夹：分类色第一次出场 */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 22 }}>
+        {CATS.filter((c) => c.id !== 'other').map((c, i) => (
+          <span key={c.id} className="fade-up" style={{ fontSize: 12, padding: '5px 10px', borderRadius: 12, background: catBg(c.id),
+            color: catInk(c.id), animationDelay: `${i * 0.04}s` }}>{c.name}</span>
+        ))}
+      </div>
+
+      <div ref={permRef} style={{ marginTop: 26, background: 'var(--card)', borderRadius: 22, padding: '18px 18px 16px',
+        boxShadow: '0 1px 0 var(--line)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <Icon name="shield" size={20} color={granted ? 'var(--pri)' : 'var(--ink2)'} />
+          <span style={{ fontSize: 16, fontWeight: 500, flex: 1 }}>无障碍权限</span>
+          <span style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: granted ? 'var(--pri)' : 'var(--ink2)' }}>
+            <span style={{ width: 7, height: 7, borderRadius: 4, background: granted ? 'var(--pri)' : 'var(--amber)' }} />
+            {granted ? '已开启' : '未开启'}
+          </span>
+        </div>
+        <div style={{ fontSize: 13.5, lineHeight: 1.7, color: 'var(--ink2)', margin: '10px 0 0 30px' }}>
+          {granted ? '准备就绪。只有在你点「开始整理」后，我才会动手。' : '我需要它来看见并移动桌面图标。'}
+        </div>
+        {!granted && (
+          <button onClick={onPerm} className="tap" style={{ marginTop: 14, marginLeft: 30, display: 'inline-flex', alignItems: 'center', gap: 2,
+            fontSize: 14, fontWeight: 500, color: 'var(--pri)', background: 'var(--pri-soft)', padding: '8px 12px 8px 16px', borderRadius: 18 }}>
+            去开启 <Icon name="chevronRight" size={16} />
+          </button>
+        )}
+      </div>
+
+      <div style={{ flex: 1 }} />
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, fontSize: 13, color: 'var(--ink3)', marginBottom: 14 }}>
+        <Icon name="camera" size={14} /> 整理前，建议先截图每一页桌面
+      </div>
+      <PrimaryBtn innerRef={scanRef} onClick={onScan} disabled={!granted}>扫描桌面</PrimaryBtn>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ 屏幕：权限引导（照产品负责人真机 ColorOS 的路径） */
+function MiniSettings() {
+  const Row = ({ t, sub, hot }) => (
+    <div style={{ position: 'relative', display: 'flex', alignItems: 'center', padding: '9px 12px', fontSize: 12.5 }}>
+      <div style={{ flex: 1 }}>
+        <div style={{ color: 'var(--ink)' }}>{t}</div>
+        {sub && <div style={{ fontSize: 10.5, color: 'var(--ink3)', marginTop: 2 }}>{sub}</div>}
+      </div>
+      <Icon name="chevronRight" size={14} color="var(--ink3)" />
+      {hot && <div style={{ position: 'absolute', inset: 2, borderRadius: 10, border: '2px solid var(--pri)', animation: 'pulse 1.6s ease-in-out infinite' }} />}
+    </div>
+  );
+  return (
+    <div style={{ background: 'oklch(0.955 0.004 250)', borderRadius: 16, padding: '12px 10px', border: '1px solid var(--line)' }}>
+      <div style={{ fontSize: 14, fontWeight: 500, padding: '0 6px 8px' }}>无障碍</div>
+      <div style={{ display: 'flex', gap: 16, fontSize: 11.5, color: 'var(--ink3)', padding: '0 6px 8px' }}>
+        <span style={{ color: 'var(--ink)', borderBottom: '2px solid var(--ink)', paddingBottom: 2 }}>通用</span><span>视觉</span><span>听觉</span><span>互动</span>
+      </div>
+      <div style={{ fontSize: 10.5, color: 'var(--ink3)', padding: '2px 8px 4px' }}>便捷功能</div>
+      <div style={{ background: '#fff', borderRadius: 12, opacity: .55 }}>
+        <Row t="无障碍菜单" sub="快捷显示常用功能" /><Row t="无障碍按钮" />
+      </div>
+      <div style={{ fontSize: 10.5, color: 'var(--ink3)', padding: '10px 8px 4px' }}>更多</div>
+      <div style={{ background: '#fff', borderRadius: 12 }}><Row t="已下载的应用" hot /></div>
+    </div>
+  );
+}
+function PermScreen({ onBack, onDone }) {
+  const steps = [
+    ['打开手机的「设置」', '在设置顶部搜索「无障碍」最快'],
+    ['进入「无障碍」', null],
+    ['点最下面的「已下载的应用」', '上面那些系统功能都不用管'],
+    ['找到「一键理桌」，打开开关', '系统会弹出一段说明，点「允许」就好'],
+  ];
+  return (
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
+      <TopBar title="开启权限" onBack={onBack} />
+      <div style={{ flex: 1, overflow: 'auto', padding: '4px 22px 0' }}>
+        <p style={{ margin: '0 0 18px', fontSize: 14, lineHeight: 1.75, color: 'var(--ink2)' }}>四步，大约半分钟。</p>
+        {steps.map(([t, sub], i) => (
+          <div key={i} style={{ display: 'flex', gap: 14, paddingBottom: i === steps.length - 1 ? 0 : 18, position: 'relative' }}>
+            {i < steps.length - 1 && <div style={{ position: 'absolute', left: 13, top: 30, bottom: 2, width: 1, background: 'var(--line)' }} />}
+            <div style={{ width: 27, height: 27, borderRadius: 14, flex: 'none', display: 'grid', placeItems: 'center',
+              fontFamily: 'var(--serif)', fontSize: 14, fontWeight: 600, background: i === 2 ? 'var(--pri)' : 'var(--pri-soft)',
+              color: i === 2 ? '#fff' : 'var(--pri-deep)' }}>{i + 1}</div>
+            <div style={{ flex: 1, paddingTop: 3 }}>
+              <div style={{ fontSize: 15, fontWeight: 500 }}>{t}</div>
+              {sub && <div style={{ fontSize: 13, color: 'var(--ink3)', marginTop: 4 }}>{sub}</div>}
+              {i === 2 && <div style={{ marginTop: 12 }}><MiniSettings /></div>}
+            </div>
+          </div>
+        ))}
+        <div style={{ margin: '22px 0 12px', padding: '12px 14px', borderRadius: 14, background: 'var(--card)', fontSize: 12.5, lineHeight: 1.7, color: 'var(--ink2)' }}>
+          <b style={{ fontWeight: 500, color: 'var(--ink)' }}>开关是灰色的、点不动？</b><br />
+          设置 → 应用 → 一键理桌 → 右上角 <Icon name="more" size={12} style={{ verticalAlign: '-1px' }} /> → 允许受限设置，再回来打开。
+        </div>
+      </div>
+      <div style={{ padding: '10px 22px 26px' }}>
+        <PrimaryBtn onClick={onDone}>去设置里开启</PrimaryBtn>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ 桌面（扫描缩略图与整理演示共用） */
+const GRID = { cols: 4, cellW: W / 4, cellH: 104, top: 100 }; // top 给顶部进度条留位
+const posOf = (i) => ({ x: (i % GRID.cols) * GRID.cellW, y: GRID.top + Math.floor(i / GRID.cols) * GRID.cellH });
+function DeskItem({ item, pos, moving }) {
+  const isFolder = item.kind === 'folder';
+  return (
+    <div style={{ position: 'absolute', left: pos.x, top: pos.y, width: GRID.cellW, display: 'flex', flexDirection: 'column', alignItems: 'center',
+      transition: 'left .45s cubic-bezier(.3,.7,.2,1), top .45s cubic-bezier(.3,.7,.2,1), transform .45s ease, opacity .45s ease',
+      transform: moving ? 'scale(.5)' : 'none', opacity: moving ? 0.85 : 1, zIndex: moving ? 5 : 1 }}>
+      {isFolder ? (
+        <div className="fade-up" style={{ width: 56, height: 56, borderRadius: 16, padding: 7,
+          background: `oklch(0.92 ${0.07 * catOf(item.cat).c} ${catOf(item.cat).h} / .34)`,
+          display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 4, backdropFilter: 'blur(6px)' }}>
+          {item.apps.slice(0, 4).map((n) => <AppTile key={n} name={n} size={18} radius={5} />)}
+        </div>
+      ) : <AppTile name={item.name} size={56} radius={16} />}
+      <div style={{ marginTop: 7, fontSize: 11.5, color: '#fff', textShadow: '0 1px 2px rgba(0,0,0,.35)', whiteSpace: 'nowrap' }}>
+        {isFolder ? catName(item.cat) : item.name}
+      </div>
+    </div>
+  );
+}
+const initialDesk = () => MESSY.map((i) => ({ key: APPS[i].id, kind: 'app', name: APPS[i].name, cat: APPS[i].cat }));
+
+/* ------------------------------------------------------------ 屏幕：扫描 */
+function ScanScreen({ onDone }) {
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setN((v) => Math.min(24, v + 1)), 90);
+    const d = setTimeout(onDone, 3000);
+    return () => { clearInterval(t); clearTimeout(d); };
+  }, []);
+  const desk = initialDesk();
+  return (
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', padding: '40px 22px' }}>
+      <div style={{ position: 'relative', width: W * 0.56, height: CH * 0.56, borderRadius: 22, overflow: 'hidden', background: 'var(--wall)',
+        boxShadow: '0 16px 40px rgba(40,50,30,.18)' }}>
+        <div style={{ position: 'absolute', left: 0, top: 0, width: W, height: CH, transform: 'scale(.56)', transformOrigin: '0 0' }}>
+          {desk.map((it, i) => <DeskItem key={it.key} item={it} pos={posOf(i)} />)}
+        </div>
+        <div style={{ position: 'absolute', left: 0, right: 0, top: 0, height: '18%', animation: 'sweep 1.6s ease-in-out infinite',
+          background: 'linear-gradient(to bottom, transparent, var(--pri-glow) 70%, var(--pri-light))', borderBottom: '1.5px solid var(--pri-light)' }} />
+      </div>
+      <div style={{ fontFamily: 'var(--serif)', fontSize: 44, fontWeight: 600, marginTop: 36 }}>{n}</div>
+      <div style={{ fontSize: 15, color: 'var(--ink2)', marginTop: 4 }}>正在认识你的图标…</div>
+      <div style={{ fontSize: 13, color: 'var(--ink3)', marginTop: 18 }}>只是读取，不会改动任何东西</div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ 屏幕：分类预览 */
+function planOf(assign, skip) {
+  const groups = CATS.map((c) => ({ ...c, apps: MESSY.map((i) => APPS[i]).filter((a) => assign[a.id] === c.id) }));
+  const active = groups.filter((g) => g.id !== 'other' && !skip[g.id] && g.apps.length >= 2);
+  const moves = active.reduce((s, g) => s + g.apps.length - 1, 0);
+  const icons = active.reduce((s, g) => s + g.apps.length, 0);
+  return { groups, active, moves, icons, folders: active.length };
+}
+function PreviewScreen({ assign, setAssign, skip, setSkip, onBack, onStart }) {
+  const [picking, setPicking] = useState(null);
+  const plan = planOf(assign, skip);
+  return (
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', position: 'relative' }}>
+      <TopBar title="看看这样分可以吗" onBack={onBack} />
+      <div style={{ padding: '0 22px 6px', fontSize: 14, color: 'var(--ink2)' }}>
+        将建 <b style={{ fontFamily: 'var(--serif)', fontWeight: 600, color: 'var(--ink)', fontSize: 17 }}>{plan.folders}</b> 个文件夹，
+        收好 <b style={{ fontFamily: 'var(--serif)', fontWeight: 600, color: 'var(--ink)', fontSize: 17 }}>{plan.icons}</b> 个图标
+      </div>
+      <div style={{ fontSize: 12.5, color: 'var(--ink3)', padding: '0 22px 12px' }}>点图标可以换个分类</div>
+      <div style={{ flex: 1, overflow: 'auto', padding: '0 16px 12px' }}>
+        {plan.groups.filter((g) => g.apps.length).map((g) => {
+          const isOther = g.id === 'other';
+          const off = !isOther && skip[g.id];
+          const single = !isOther && g.apps.length < 2;
+          return (
+            <div key={g.id} style={{ background: isOther || off ? 'transparent' : catBg(g.id),
+              border: isOther ? '1.5px dashed var(--line)' : off ? '1.5px solid var(--line)' : '1.5px solid transparent',
+              borderRadius: 20, padding: '14px 14px 12px', marginBottom: 10, opacity: off ? 0.55 : 1, transition: 'all .25s' }}>
+              <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
+                <span style={{ fontSize: 15, fontWeight: 500, color: isOther ? 'var(--ink)' : catInk(g.id) }}>{g.name}</span>
+                <span style={{ fontFamily: 'var(--serif)', fontSize: 14, color: isOther ? 'var(--ink3)' : catInk(g.id), opacity: .7, marginLeft: 8 }}>{g.apps.length}</span>
+                <span style={{ flex: 1 }} />
+                {!isOther && !single && (
+                  <button onClick={() => setSkip({ ...skip, [g.id]: !skip[g.id] })} style={{ fontSize: 12.5, color: off ? 'var(--pri)' : 'var(--ink3)' }}>
+                    {off ? '整理这一类' : '这一类不动'}
+                  </button>
+                )}
+                {single && <span style={{ fontSize: 12, color: 'var(--ink3)' }}>只有 1 个，留在原处</span>}
+              </div>
+              {isOther && <div style={{ fontSize: 12.5, color: 'var(--ink2)', margin: '-4px 0 12px', lineHeight: 1.6 }}>这几个我认不出，会留在原处。点一下可以帮它们选个家。</div>}
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px 4px' }}>
+                {g.apps.map((a) => (
+                  <button key={a.id} onClick={() => setPicking(a)} className="tap" style={{ width: 64, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6 }}>
+                    <AppTile name={a.name} size={44} />
+                    <span style={{ fontSize: 11.5, color: 'var(--ink2)', maxWidth: 62, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{a.name}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div style={{ padding: '12px 22px 26px', borderTop: '1px solid var(--line)', background: 'var(--paper)' }}>
+        <PrimaryBtn onClick={onStart} disabled={!plan.moves}>开始整理 · 约 {Math.max(5, Math.round(plan.moves * SEC_PER_MOVE / 5) * 5)} 秒</PrimaryBtn>
+      </div>
+      {picking && (
+        <Sheet onClose={() => setPicking(null)}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+            <AppTile name={picking.name} size={40} />
+            <span style={{ fontSize: 16, fontWeight: 500 }}>把「{picking.name}」放到…</span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 8 }}>
+            {CATS.map((c) => {
+              const on = assign[picking.id] === c.id;
+              return (
+                <button key={c.id} className="tap" onClick={() => { setAssign({ ...assign, [picking.id]: c.id }); setPicking(null); }}
+                  style={{ height: 44, borderRadius: 14, fontSize: 14, background: on ? 'var(--pri)' : 'var(--paper)', color: on ? '#fff' : 'var(--ink)',
+                    border: on ? 'none' : '1px solid var(--line)' }}>{c.name}</button>
+              );
+            })}
+          </div>
+        </Sheet>
+      )}
+    </div>
+  );
+}
+function ConfirmSheet({ onGo, onCancel }) {
+  const rows = [
+    ['handOff', '整理时请别碰屏幕', '我会接管桌面，一个个把图标送进文件夹'],
+    ['volume', '按任一音量键，随时停下', '停下后桌面保持那一刻的样子'],
+    ['camera', '截过图了吗？', '之后想复原，可以对照截图拖回去'],
+  ];
+  return (
+    <Sheet onClose={onCancel}>
+      <div style={{ fontFamily: 'var(--serif)', fontWeight: 600, fontSize: 21, marginBottom: 18 }}>开始前，确认三件事</div>
+      {rows.map(([ic, t, sub]) => (
+        <div key={t} style={{ display: 'flex', gap: 14, marginBottom: 16 }}>
+          <div style={{ width: 36, height: 36, borderRadius: 18, background: 'var(--pri-soft)', display: 'grid', placeItems: 'center', flex: 'none' }}>
+            <Icon name={ic} size={18} color="var(--pri-deep)" />
+          </div>
+          <div>
+            <div style={{ fontSize: 15, fontWeight: 500 }}>{t}</div>
+            <div style={{ fontSize: 13, color: 'var(--ink3)', marginTop: 3 }}>{sub}</div>
+          </div>
+        </div>
+      ))}
+      <PrimaryBtn onClick={onGo} style={{ marginTop: 8 }}>好，开始整理</PrimaryBtn>
+      <GhostBtn onClick={onCancel} style={{ marginTop: 4 }}>我先去截个图</GhostBtn>
+    </Sheet>
+  );
+}
+
+/* ------------------------------------------------------------ 屏幕：整理中（真机上这是桌面本身 + 不可触摸的进度条） */
+function RunScreen({ assign, skip, volumeRef, onFinish }) {
+  const [items, setItems] = useState(initialDesk);
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const [moving, setMoving] = useState(null); // { key, to }
+  const [idx, setIdx] = useState(0);
+  const [stopped, setStopped] = useState(false);
+  const stepsRef = useRef(null);
+  const timers = useRef([]);
+  const later = (fn, ms) => timers.current.push(setTimeout(fn, ms));
+
+  if (!stepsRef.current) {
+    const plan = planOf(assign, skip);
+    stepsRef.current = plan.active.flatMap((g) => g.apps.slice(1).map((a) => ({ app: a, anchor: g.apps[0].id, cat: g.id })));
+  }
+  const steps = stepsRef.current;
+  const t0 = useRef(Date.now());
+
+  useEffect(() => {
+    volumeRef.current = () => {
+      if (stopped) return;
+      timers.current.forEach(clearTimeout); timers.current = [];
+      setMoving(null); setStopped(true);
+      later(() => onFinish({ stopped: true, done: idx, total: steps.length, secs: Math.round((Date.now() - t0.current) / 1000) }), 1600);
+    };
+  });
+  useEffect(() => () => { timers.current.forEach(clearTimeout); volumeRef.current = null; }, []);
+
+  useEffect(() => {
+    if (stopped) return;
+    if (idx >= steps.length) {
+      later(() => onFinish({ stopped: false, done: idx, total: steps.length, secs: Math.round((Date.now() - t0.current) / 1000) }), 1400);
+      return;
+    }
+    const st = steps[idx];
+    later(() => {
+      setMoving({ key: st.app.id, to: itemsRef.current.findIndex((it) => it.key === st.anchor) });
+      later(() => {
+        setItems((cur) => {
+          const next = cur.filter((it) => it.key !== st.app.id);
+          return next.map((it) => it.key !== st.anchor ? it
+            : it.kind === 'folder' ? { ...it, apps: [...it.apps, st.app.name] }
+            : { key: it.key, kind: 'folder', cat: st.cat, apps: [it.name, st.app.name] });
+        });
+        setMoving(null);
+        setIdx((v) => v + 1);
+      }, 480);
+    }, idx === 0 ? 900 : 380);
+  }, [idx, stopped]);
+
+  const cur = steps[Math.min(idx, steps.length - 1)];
+  const finished = idx >= steps.length;
+  const text = stopped ? '已停下，桌面保持现在的样子' : finished ? '理好了' : `正在把「${cur.app.name}」放进「${catName(cur.cat)}」`;
+  return (
+    <div style={{ position: 'absolute', inset: 0 }}>
+      {items.map((it, i) => <DeskItem key={it.key} item={it} moving={moving && moving.key === it.key}
+        pos={moving && moving.key === it.key ? posOf(moving.to) : posOf(i)} />)}
+      {/* 顶部进度条：不可触摸（pointer-events: none），对应 ADR-005 */}
+      <div style={{ position: 'absolute', top: 6, left: 18, right: 18, pointerEvents: 'none', zIndex: 30, background: 'rgba(20,24,18,.62)',
+        backdropFilter: 'blur(10px)', borderRadius: 18, padding: '11px 14px 12px', color: '#fff' }}>
+        <div style={{ display: 'flex', alignItems: 'center', fontSize: 13.5 }}>
+          <span style={{ flex: 1, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{text}</span>
+          <span style={{ fontFamily: 'var(--serif)', fontSize: 13, opacity: .8, marginLeft: 8 }}>{Math.min(idx, steps.length)}/{steps.length}</span>
+        </div>
+        <div style={{ height: 3, borderRadius: 2, background: 'rgba(255,255,255,.2)', marginTop: 9, overflow: 'hidden' }}>
+          <div style={{ height: '100%', width: `${(Math.min(idx, steps.length) / steps.length) * 100}%`, background: stopped ? 'var(--amber)' : 'var(--pri-light)',
+            transition: 'width .4s ease' }} />
+        </div>
+        {!stopped && !finished && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: 11.5, opacity: .7, marginTop: 8 }}>
+            <Icon name="volume" size={12} /> 按音量键可随时停下
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ 屏幕：完成 */
+function DoneScreen({ result, assign, skip, onHome, onAgain }) {
+  const plan = planOf(assign, skip);
+  const r = result || { stopped: false, done: plan.moves, total: plan.moves, secs: Math.round(plan.moves * SEC_PER_MOVE) };
+  const left = plan.groups.find((g) => g.id === 'other').apps;
+  const Stat = ({ n, label }) => (
+    <div style={{ flex: 1 }}>
+      <div style={{ fontFamily: 'var(--serif)', fontWeight: 600, fontSize: 34 }}>{n}</div>
+      <div style={{ fontSize: 12.5, color: 'var(--ink3)', marginTop: 2 }}>{label}</div>
+    </div>
+  );
+  return (
+    <div style={{ height: '100%', display: 'flex', flexDirection: 'column', padding: '0 22px 26px' }}>
+      <div className="fade-up" style={{ paddingTop: 60 }}>
+        <div style={{ width: 52, height: 52, borderRadius: 26, display: 'grid', placeItems: 'center',
+          background: r.stopped ? 'oklch(0.95 0.04 70)' : 'var(--pri-soft)' }}>
+          <Icon name={r.stopped ? 'volume' : 'check'} size={24} color={r.stopped ? 'oklch(0.55 0.12 60)' : 'var(--pri)'} sw={2} />
+        </div>
+        <h2 style={{ fontFamily: 'var(--serif)', fontWeight: 600, fontSize: 32, margin: '22px 0 8px' }}>{r.stopped ? '先停在这里了' : '理好了'}</h2>
+        <div style={{ fontSize: 14.5, color: 'var(--ink2)', lineHeight: 1.7 }}>
+          {r.stopped ? `完成了 ${r.done} 步，剩下的 ${r.total - r.done} 步没有动。随时可以再来。` : `用时 ${r.secs} 秒，桌面清爽多了。`}
+        </div>
+      </div>
+      {!r.stopped && (
+        <div className="fade-up" style={{ display: 'flex', marginTop: 34, padding: '18px 0', borderTop: '1px solid var(--line)', borderBottom: '1px solid var(--line)', animationDelay: '.08s' }}>
+          <Stat n={plan.icons} label="个图标收好了" /><Stat n={plan.folders} label="个新文件夹" /><Stat n={left.length} label="个留在原处" />
+        </div>
+      )}
+      {!r.stopped && (
+        <div className="fade-up" style={{ marginTop: 20, animationDelay: '.16s' }}>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {plan.active.map((g) => (
+              <span key={g.id} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 13, padding: '7px 12px', borderRadius: 16,
+                background: catBg(g.id), color: catInk(g.id) }}>
+                <Icon name="folder" size={14} />{g.name}<span style={{ opacity: .6 }}>{g.apps.length}</span>
+              </span>
+            ))}
+          </div>
+          {left.length > 0 && <div style={{ fontSize: 12.5, color: 'var(--ink3)', marginTop: 14, lineHeight: 1.6 }}>
+            「{left.map((a) => a.name).join('」「')}」认不出类别，留在了原处。</div>}
+        </div>
+      )}
+      <div style={{ flex: 1 }} />
+      <PrimaryBtn onClick={onHome}>回桌面看看</PrimaryBtn>
+      <GhostBtn onClick={onAgain} style={{ marginTop: 4 }}>{r.stopped ? '继续整理' : '完成'}</GhostBtn>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------ 一台手机 = 一个独立状态机 */
+function AppPhone({ initial }) {
+  const [screen, setScreen] = useState(initial.screen);
+  const [granted, setGranted] = useState(initial.granted);
+  const [tour, setTour] = useState(initial.tour ? 0 : null);
+  const [assign, setAssign] = useState(() => Object.fromEntries(APPS.map((a) => [a.id, a.cat])));
+  const [skip, setSkip] = useState({});
+  const [confirm, setConfirm] = useState(false);
+  const [result, setResult] = useState(null);
+  const [toast, setToast] = useState('');
+  const [rects, setRects] = useState({});
+  const screenRef = useRef(null), permRef = useRef(null), scanRef = useRef(null), volumeRef = useRef(null);
+
+  const say = (t) => { setToast(t); setTimeout(() => setToast(''), 1800); };
+
+  useLayoutEffect(() => {
+    if (tour === null || !screenRef.current) return;
+    const base = screenRef.current.getBoundingClientRect();
+    const rel = (el) => { if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.left - base.left, y: r.top - base.top, w: r.width, h: r.height }; };
+    setRects({ perm: rel(permRef.current), scan: rel(scanRef.current), volume: null });
+  }, [tour, screen]);
+
+  const onVolume = () => {
+    if (volumeRef.current) volumeRef.current();
+    else say(tour === 2 ? '对，整理时按这里就能停下' : '只有在整理时，音量键才会让我停下');
+  };
+  const dark = screen === 'run';
+
+  return (
+    <PhoneFrame dark={dark} volHot={tour === 2 || (screen === 'run')} onVolume={onVolume}>
+      <div ref={screenRef} style={{ position: 'absolute', inset: 0 }}>
+        {screen === 'home' && <HomeScreen granted={granted} permRef={permRef} scanRef={scanRef}
+          onPerm={() => setScreen('perm')} onScan={() => granted ? setScreen('scan') : say('先开启权限哦')} />}
+        {screen === 'perm' && <PermScreen onBack={() => setScreen('home')}
+          onDone={() => { setGranted(true); setScreen('home'); say('权限已开启，可以开始了'); }} />}
+        {screen === 'scan' && <ScanScreen onDone={() => setScreen('preview')} />}
+        {screen === 'preview' && <PreviewScreen assign={assign} setAssign={setAssign} skip={skip} setSkip={setSkip}
+          onBack={() => setScreen('home')} onStart={() => setConfirm(true)} />}
+        {screen === 'run' && <RunScreen assign={assign} skip={skip} volumeRef={volumeRef}
+          onFinish={(r) => { setResult(r); setScreen('done'); }} />}
+        {screen === 'done' && <DoneScreen result={result} assign={assign} skip={skip}
+          onHome={() => { setResult(null); setScreen('run'); }} onAgain={() => { setResult(null); setScreen('home'); }} />}
+        {confirm && <ConfirmSheet onCancel={() => setConfirm(false)} onGo={() => { setConfirm(false); setScreen('run'); }} />}
+        {tour !== null && screen === 'home' && <Spotlight step={tour} rects={rects}
+          onNext={() => setTour(tour < TOUR.length - 1 ? tour + 1 : null)} onSkip={() => setTour(null)} />}
+        <Toast text={toast} />
+      </div>
+    </PhoneFrame>
+  );
+}
+
+const PHONES = [
+  { label: '首页 · 第一次打开时的聚焦引导', screen: 'home', granted: false, tour: true },
+  { label: '开启权限 · 照着你手机的真实路径', screen: 'perm', granted: false },
+  { label: '分类预览 · 点图标可以换分类', screen: 'preview', granted: true },
+  { label: '整理中 · 点机身右侧音量键可停下', screen: 'run', granted: true },
+  { label: '完成', screen: 'done', granted: true },
+];
+const PALETTES = [
+  { id: 'cobalt', name: '钴蓝（已选定）', h: 252, c: 0.15 },
+  { id: 'coral', name: '珊瑚', h: 32, c: 0.16 },
+  { id: 'teal', name: '青碧', h: 192, c: 0.105 },
+];
+function PaletteSwitch() {
+  const [pal, setPal] = useState('cobalt'); // 已选定钴蓝：每次打开都从钴蓝开始，不读旧的本地记忆
+  useEffect(() => {
+    document.documentElement.dataset.palette = pal;
+  }, [pal]);
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, maxWidth: 1180, margin: '18px auto 0', padding: '0 32px', fontSize: 13, color: 'var(--ink2)' }}>
+      主色
+      {PALETTES.map((p) => (
+        <button key={p.id} onClick={() => setPal(p.id)} className="tap" style={{ display: 'inline-flex', alignItems: 'center', gap: 7,
+          padding: '6px 13px 6px 8px', borderRadius: 16, background: pal === p.id ? '#fff' : 'transparent',
+          boxShadow: pal === p.id ? '0 1px 3px rgba(0,0,0,.08)' : 'none', color: pal === p.id ? 'var(--ink)' : 'var(--ink2)' }}>
+          <span style={{ width: 14, height: 14, borderRadius: 7, background: `oklch(0.63 ${p.c} ${p.h})` }} />{p.name}
+        </button>
+      ))}
+    </div>
+  );
+}
+function Gallery() {
+  const [seeds, setSeeds] = useState(PHONES.map(() => 0));
+  return (
+    <>
+    <PaletteSwitch />
+    <div className="stage">
+      {PHONES.map((p, i) => (
+        <div key={i}>
+          <div className="phone-label">
+            <span>{p.label}</span>
+            <button onClick={() => setSeeds(seeds.map((s, j) => (j === i ? s + 1 : s)))}>重置</button>
+          </div>
+          <AppPhone key={seeds[i]} initial={p} />
+        </div>
+      ))}
+    </div>
+    </>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<Gallery />);
+</script>
+</body>
+</html>

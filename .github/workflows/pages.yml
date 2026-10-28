@@ -1,0 +1,43 @@
+name: Pages
+
+# 落地页：site/ 原样发布。图标、字体、分享图都在 site/ 里，页面不请求任何第三方。
+# 仓库公开并在 Settings → Pages 选择 "GitHub Actions" 之后，推到 main 就自动更新。
+# 注意：博客 arvelvale.github.io 的 public/tidyhome/ 目前放着同一份页面；
+# 本仓库的 Pages 启用后，把那一份删掉，避免两处各改各的。
+on:
+  push:
+    branches: [main]
+    paths: ["site/**", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check referenced files exist
+        run: |
+          # 页面引用到的本地文件必须都在，缺一个就别发布
+          for f in logo.svg og.png fonts/geist.woff2 fonts/noto-sc.woff2; do
+            test -f "site/$f" || { echo "missing $f"; exit 1; }
+          done
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+      - id: deployment
+        uses: actions/deploy-pages@v4

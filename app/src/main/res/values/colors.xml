@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 完整色板（含分类色）在 ui/Palette.kt；这里只放主题要用到的 -->
+<resources>
+    <!-- App 图标底色 = 主色钴蓝（ADR-009） -->
+    <color name="ic_launcher_background">#3A8CE0</color>
+    <color name="page">#FFFFFF</color>
+    <color name="primary">#3A8CE0</color>
+</resources>
