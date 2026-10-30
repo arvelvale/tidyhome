@@ -38,15 +38,18 @@ object DesktopReader {
         class Fail(val reason: String) : Outcome()
     }
 
-    /** 立即读一次（不回桌面）。 */
-    fun readNow(svc: TidyAccessibilityService): Outcome {
+    /**
+     * 立即读一次（不回桌面）。
+     * @param closeFolderOnFail 读不到工作区、且发现桌面上开着文件夹时，按返回键关掉它。
+     *   **只有"扫描"这条路径传 true**：整理过程中的读取（尤其改名流程会刻意打开文件夹）不能有这个副作用。
+     */
+    fun readNow(svc: TidyAccessibilityService, closeFolderOnFail: Boolean = false): Outcome {
         val info = svc.launcherRootInfo() ?: return Outcome.Fail("读不到桌面窗口。请确认默认桌面是系统原生桌面，且手机停在桌面。")
         val root = info.first
         try {
             val out = parse(root)
-            // 副作用：如果是因为文件夹开着才读不到，按返回键关掉；本次仍算失败，
-            // 由 retryRead 的 500ms 重试接上（关文件夹需要动画时间），重试读到了就成功
-            if (out is Outcome.Fail) closeOpenFolder(svc, root)
+            // 本次仍算失败，由 retryRead 的 500ms 重试接上（关文件夹需要动画时间）
+            if (out is Outcome.Fail && closeFolderOnFail) closeOpenFolder(svc, root)
             return out
         } finally {
             LauncherNodes.release(root)
@@ -54,8 +57,9 @@ object DesktopReader {
     }
 
     /**
-     * 2026-10-24 真机：用户从文件夹里打开本 App，回桌面后 ColorOS 仍停在"文件夹打开"状态
-     * （Home 键关不掉），工作区不在节点树里 → 扫描报"找不到 id/workspace"。
+     * 2026-10-30 真机复现并取证：本 App 的图标就放在一个文件夹里，用户从文件夹里点开 App，
+     * 之后回桌面，ColorOS 仍停在"文件夹打开"状态（Home 键关不掉），节点树里只剩
+     * folder_header / folder_content，没有 id/workspace → 扫描报"找不到桌面工作区"。
      * 识别打开的文件夹（id/folder_content 或 id/folder_name）并按返回键关闭。返回是否执行了关闭。
      */
     private fun closeOpenFolder(svc: TidyAccessibilityService, root: AccessibilityNodeInfo): Boolean {
@@ -78,7 +82,7 @@ object DesktopReader {
 
     private fun retryRead(svc: TidyAccessibilityService, handler: Handler, attempt: Int, callback: (Outcome) -> Unit) {
         val out = try {
-            readNow(svc)
+            readNow(svc, closeFolderOnFail = true)
         } catch (t: Throwable) {
             Log.i(TAG, "读桌面异常：${Log.getStackTraceString(t)}")
             Outcome.Fail("读取桌面时出错：${t.message}")
@@ -87,6 +91,11 @@ object DesktopReader {
             if (out is Outcome.Fail) Log.i(TAG, "读桌面失败（已重试 ${attempt + 1} 次）：${out.reason}")
             callback(out)
             return
+        }
+        // 窗口列表里压根没有桌面（2026-10-30 用户真机出现过）：多半是第一次 Home 还没落地，在中途再按一次
+        if (attempt == 2 && out is Outcome.Fail && out.reason.startsWith("读不到桌面窗口")) {
+            Log.i(TAG, "读桌面：仍找不到桌面窗口，再按一次 Home")
+            svc.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME)
         }
         Log.i(TAG, "读桌面第 ${attempt + 1} 次未成功：${(out as Outcome.Fail).reason}，${RETRY_MS}ms 后重试")
         handler.postDelayed({ retryRead(svc, handler, attempt + 1, callback) }, RETRY_MS)

@@ -51,6 +51,14 @@ class GestureExecutor(
         /** 图案中心在节点范围里的纵向比例（节点含下方应用名）。实测值：格子 [588,977] 图案中心 y=774。 */
         const val ICON_CENTER_Y_RATIO = 0.48f
 
+        // ---- 拖动模式下桌面会被缩放并整体下移（2026-10-30 一加 13 / ColorOS 16 真机截图 + 日志取证）
+        // 长按拖起图标后，ColorOS 把工作区缩小、顶部让出工具栏，两侧露出相邻页：同一个图标的屏幕位置变了。
+        // 按拖动前读到的坐标松手，会落在页面外的空白处，桌面把图标"插进第一格"而不是放进文件夹。
+        // 所以拖起后（手指仍按着）必须重读一次目标位置。下面两个常量只在重读失败时做估计，
+        // 由一张截图量得：横向以屏幕中心缩放 0.886，纵向 y' = 0.886·y + 516px（屏高 2780 的 18.6%）。
+        const val DRAG_MODE_SCALE = 0.886f
+        const val DRAG_MODE_SHIFT_Y_RATIO = 0.1856f
+
         // ---- 跨页拖动（全部为估计值，待真机实测）
         /** 从 A 移到屏幕边缘的时长。估计值，待真机实测。 */
         const val EDGE_MOVE_MS = 400L
@@ -437,7 +445,7 @@ class GestureExecutor(
                     return@goToPage
                 }
                 log("A「${s.appName}」$aBox；目的地$dBox")
-                drag(aBox, dBox, pa, pd) { ok ->
+                drag(aBox, dBox, pa, pd, s) { ok ->
                     if (!ok) {
                         retryOrFail(s, base, n, "拖动手势未完成", cb)
                         return@drag
@@ -526,15 +534,37 @@ class GestureExecutor(
         }
     }
 
-    /** 依次发出连续手势的各段；任一段被取消 → cb(false)；中途收到中止 → 抬起手指后 cb(false)。 */
-    private fun runChain(startX: Float, startY: Float, segs: List<Seg>, tag: String, cb: (Boolean) -> Unit) {
+    /**
+     * 依次发出连续手势的各段；任一段被取消 → cb(false)；中途收到中止 → 抬起手指后 cb(false)。
+     * @param laterSegs 非空时：[segs] 发完后手指**仍按着**（最后一段 willContinue），此时调用它取后续各段
+     *   （拖动要在这里重读桌面）；返回 null 表示放弃，抬起手指并 cb(false)。
+     */
+    private fun runChain(
+        startX: Float, startY: Float, segs0: List<Seg>, tag: String,
+        laterSegs: (() -> List<Seg>?)? = null, cb: (Boolean) -> Unit,
+    ) {
+        val segs = ArrayList(segs0)
+        var provider = laterSegs
         fun step(i: Int, prev: StrokeDescription?, cx: Float, cy: Float) {
             if (i >= segs.size) {
-                cb(true)
+                val p = provider
+                if (p == null) {
+                    cb(true)
+                    return
+                }
+                provider = null
+                val more = if (aborted()) null else p()
+                if (more == null || prev == null) {
+                    if (prev != null) liftFinger(prev, cx, cy)
+                    cb(false)
+                    return
+                }
+                segs.addAll(more)
+                step(i, prev, cx, cy)
                 return
             }
             val seg = segs[i]
-            val last = i == segs.size - 1
+            val last = i == segs.size - 1 && provider == null
             val path = Path().apply { moveTo(cx, cy); lineTo(seg.x, seg.y) }
             val stroke = prev?.continueStroke(path, 0L, seg.ms, !last)
                 ?: StrokeDescription(path, 0L, seg.ms, !last)
@@ -564,23 +594,74 @@ class GestureExecutor(
         }
     }
 
-    private fun drag(a: Box, d: Box, pa: Int, pd: Int, cb: (Boolean) -> Unit) {
+    /**
+     * 拖动分两阶段：
+     * 1. 按住 A（同页）/ 按住 A 再带到屏幕边缘等翻页（跨页），手指不抬；
+     * 2. 此时桌面已进入拖动模式（工作区被缩放平移），**重读目的地位置**，再移过去、悬停、松手。
+     * 日志里「拖动前」坐标与「拖动中」坐标之差就是这次拖动模式带来的位移，供下次校准。
+     */
+    private fun drag(a: Box, d: Box, pa: Int, pd: Int, s: TidyStep, cb: (Boolean) -> Unit) {
         val (ax, ay) = center(a)
         val (dx, dy) = center(d)
         val ch = Chain(ax, ay)
         ch.hold(LONG_PRESS_MS, 1f)
-        if (pa == pd) {
-            ch.move(dx, dy, DRAG_MOVE_MS)
-        } else {
+        if (pa != pd) {
             val forward = pd > pa
             val edgeX = if (forward) screenW - EDGE_MARGIN_PX else EDGE_MARGIN_PX
             ch.move(edgeX, ay, EDGE_MOVE_MS)
             repeat(abs(pd - pa)) { ch.hold(EDGE_HOLD_MS, if (forward) -1f else 1f) }
-            ch.move(dx, dy, RETURN_MOVE_MS)
         }
-        ch.hold(HOVER_MS, 1f)
-        log("拖动：第 $pa 页 (${ax.toInt()},${ay.toInt()}) → 第 $pd 页 (${dx.toInt()},${dy.toInt()})，共 ${ch.segs.size} 段")
-        runChain(ax, ay, ch.segs, "拖动", cb)
+        val phase1 = ArrayList(ch.segs)
+        val fx = ch.x
+        val fy = ch.y
+        log("拖动：第 $pa 页 (${ax.toInt()},${ay.toInt()}) → 第 $pd 页，拖动前目的地中心 (${dx.toInt()},${dy.toInt()})；先按住 ${phase1.size} 段，再重读目的地")
+        runChain(ax, ay, phase1, "拖动", laterSegs = {
+            val (tx, ty) = retarget(s, d, pd)
+            val c2 = Chain(fx, fy)
+            c2.move(tx, ty, if (pa == pd) DRAG_MOVE_MS else RETURN_MOVE_MS)
+            c2.hold(HOVER_MS, 1f)
+            c2.segs
+        }, cb = cb)
+    }
+
+    private var dragTreeDumped = false
+
+    /** 拖动模式下目的地的瞄准点：优先重读桌面；读不到再按估计的缩放平移换算。 */
+    private fun retarget(s: TidyStep, dNormal: Box, pd: Int): Pair<Float, Float> {
+        val (nx, ny) = center(dNormal)
+        val rd = readNow()
+        if (!dragTreeDumped) {
+            dragTreeDumped = true
+            dumpDragTree()
+        }
+        val box = rd?.let { findDest(s, it.snapshot) }?.takeIf { it.page == pd }?.box
+        if (box != null) {
+            val (x, y) = center(box)
+            log("拖动中重读到目的地 $box（拖动前 $dNormal）→ 瞄准 (${x.toInt()},${y.toInt()})，相对拖动前位移 (${(x - nx).toInt()},${(y - ny).toInt()})")
+            return Pair(x, y)
+        }
+        val x = DRAG_MODE_SCALE * nx + (1f - DRAG_MODE_SCALE) * screenW / 2f
+        val y = DRAG_MODE_SCALE * ny + DRAG_MODE_SHIFT_Y_RATIO * screenH
+        log("拖动中读不到目的地${if (rd == null) "（桌面树读取失败）" else "（目的地不在读到的当前页上）"}，按估计缩放平移换算：(${nx.toInt()},${ny.toInt()}) → (${x.toInt()},${y.toInt()})")
+        return Pair(x, y)
+    }
+
+    /** 第一次拖动时把拖动模式下的整棵节点树存下来（探针同款导出），出问题时用来对照。 */
+    private fun dumpDragTree() {
+        try {
+            val root = svc.launcherRootInfo()?.first ?: run {
+                log("拖动中：找不到桌面窗口，没法导出节点树")
+                return
+            }
+            try {
+                val res = io.github.tidyhome.probe.NodeDumper.dumpToFile(svc, root, "drag-mode", svc.headerLines("拖动模式下"), false)
+                log("拖动模式节点树已保存：${res.file?.name}（节点数见文件）")
+            } finally {
+                LauncherNodes.release(root)
+            }
+        } catch (t: Throwable) {
+            log("导出拖动模式节点树失败：$t")
+        }
     }
 
     private fun tap(x: Float, y: Float, cb: (Boolean) -> Unit) {
