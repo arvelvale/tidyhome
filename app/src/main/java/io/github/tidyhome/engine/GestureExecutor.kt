@@ -66,8 +66,20 @@ class GestureExecutor(
         /** 从 A 移到屏幕边缘的时长。估计值，待真机实测。 */
         const val EDGE_MOVE_MS = 400L
 
-        /** 每翻一页在边缘停留的时长。估计值，待真机实测。 */
-        const val EDGE_HOLD_MS = 1000L
+        // 翻页是按边缘停留时间触发的：首次约 0.5s，之后每页约 0.75s（Launcher3 一族的常见节奏，ColorOS 未实测）。
+        // 总停留 = 首次 + (页数-1)×每页 + 余量。偏差由 [travel] 的"停放后重读"吸收，日志里「停放结果」行记录实际落点供校准。
+        const val EDGE_FIRST_FLIP_MS = 500L
+        const val EDGE_NEXT_FLIP_MS = 750L
+        const val EDGE_FLIP_MARGIN_MS = 300L
+
+        /** 停放点的纵向位置（正常模式下占屏高的比例；约第 4 行，多数页下半部是空的）。估计值。 */
+        const val PARK_Y_RATIO = 0.56f
+
+        /** 停放时在空位上停多久再松手（毫秒）。不需要触发任何悬停效果，只让桌面稳住。估计值。 */
+        const val PARK_HOVER_MS = 500L
+
+        /** 一个步骤最多跳几次（每次跨页拖动算一跳），防止来回震荡。 */
+        const val MAX_HOPS = 4
 
         /** 翻到目的地页后移回目标图案中心的时长，同样要快（理由见 [DRAG_MOVE_MS]）。估计值，待真机实测。 */
         const val RETURN_MOVE_MS = 300L
@@ -392,6 +404,7 @@ class GestureExecutor(
             cb(false)
             return
         }
+        hops = 0
         attempt(s, null, 1, cb)
     }
 
@@ -436,8 +449,8 @@ class GestureExecutor(
         val cp = snap.currentPage
         log("定位：「${s.appName}」在第 $pa 页；目的地「${d.name}」在第 $pd 页；当前第 $cp 页（第 $n 次尝试）")
 
-        // 第 3 步：翻到 A 所在页、读 A（及同页目的地）的坐标并拖动
-        fun goA(destBoxKnown: Box?) {
+        // 同页：翻到 A 所在页、读 A 和目的地的坐标并拖动
+        fun goSame() {
             goToPage(pa) { r2 ->
                 if (r2 == null) {
                     retryOrFail(s, base, n, "翻不到第 $pa 页", cb)
@@ -445,13 +458,13 @@ class GestureExecutor(
                 }
                 val a2 = SnapshotQuery.findApp(r2.snapshot, s.appName)?.takeIf { it.page == pa }
                 val aBox = a2?.box
-                val dBox = if (pd == pa) findDest(s, r2.snapshot)?.takeIf { it.page == pa }?.box else destBoxKnown
+                val dBox = findDest(s, r2.snapshot)?.takeIf { it.page == pa }?.box
                 if (aBox == null || dBox == null) {
                     retryOrFail(s, base, n, "拿不到坐标（A=$aBox，目的地=$dBox）", cb)
                     return@goToPage
                 }
                 log("A「${s.appName}」$aBox；目的地$dBox")
-                drag(aBox, dBox, pa, pd) { ok ->
+                drag(aBox, dBox) { ok ->
                     if (!ok) {
                         retryOrFail(s, base, n, "拖动手势未完成", cb)
                         return@drag
@@ -480,22 +493,72 @@ class GestureExecutor(
             }
         }
 
-        // 第 2 步：目的地在别的页 → 先确保目的地坐标已知（当前页读过，或翻过去读一次）
-        when {
-            pd == pa -> goA(null)
-            pd == cp -> goA(d.box)
-            else -> goToPage(pd) { r1 ->
-                val d1 = r1?.let { findDest(s, it.snapshot) }?.takeIf { it.page == pd }
-                if (d1?.box == null) {
-                    retryOrFail(s, base, n, "翻到第 $pd 页读不到目的地坐标", cb)
-                } else {
-                    log("已记下目的地页（第 $pd 页）坐标 ${d1.box}")
-                    goA(d1.box)
-                }
-            }
-        }
+        // 跨页不再"盲拖到别的页直接放进文件夹"：先拖到目的地页附近停放在空位，重读确认落在哪一页，
+        // 到了同一页再用 goSame 放进文件夹。原因见 travel 的注释。
+        if (pd == pa) goSame() else travel(s, base, n, pa, pd, cb)
     }
 
+    private var hops = 0
+
+    /**
+     * 跨页移动：长按 A → 带到屏幕边缘等翻页 → **落在目的地页的空位上**（不碰任何图标/文件夹）→ 重读确认实际落在哪一页，
+     * 然后回到 [attempt] 重新定位：同页了就放进文件夹，没到（或翻过头）就再来一跳。
+     *
+     * 为什么不一口气拖进目的地文件夹（2026-10-30 用户观察到：页数相差多时会中途停住、继续拖、甚至放错文件夹）：
+     * 1. 翻页是**按边缘停留的时间**触发的，不是按次数；旧代码假设"每页停 1 秒翻一页"，从没验证过。
+     *    桌面常见的节奏是首次约 0.5 秒、之后每页约 0.75 秒，相差 N 页时会多翻/少翻，页数越多误差越大；
+     * 2. 拖动模式下桌面本体不在节点树里（弹的是长按快捷菜单），翻没翻到、翻到第几页，当场根本无从得知；
+     * 3. 翻错页之后手指仍移到"目的地的坐标"悬停，那里在别的页上恰好是另一个文件夹 → 放错文件夹，而且不好撤销。
+     * 现在即使翻错页也只是落在一个空位上，下一轮重读后按真实页码纠正；翻页停留时间的偏差也由此被吸收。
+     */
+    private fun travel(s: TidyStep, base: Baseline, n: Int, pa: Int, pd: Int, cb: (Boolean) -> Unit) {
+        if (hops >= MAX_HOPS) {
+            log("「${s.appName}」已跳 $hops 次仍没到目的地页（第 $pd 页），放弃这一步")
+            cb(false)
+            return
+        }
+        hops++
+        goToPage(pa) { r2 ->
+            if (r2 == null) {
+                retryOrFail(s, base, n, "翻不到第 $pa 页", cb)
+                return@goToPage
+            }
+            val aBox = SnapshotQuery.findApp(r2.snapshot, s.appName)?.takeIf { it.page == pa }?.box
+            if (aBox == null) {
+                retryOrFail(s, base, n, "拿不到「${s.appName}」的坐标", cb)
+                return@goToPage
+            }
+            val (ax, ay) = center(aBox)
+            val forward = pd > pa
+            val flips = abs(pd - pa)
+            val edgeX = if (forward) screenW - EDGE_MARGIN_PX else EDGE_MARGIN_PX
+            val holdMs = EDGE_FIRST_FLIP_MS + (flips - 1) * EDGE_NEXT_FLIP_MS + EDGE_FLIP_MARGIN_MS
+            val (px, py) = toDragLayout(screenW / 2f, screenH * PARK_Y_RATIO)
+            val ch = Chain(ax, ay)
+            ch.hold(LONG_PRESS_MS, 1f)
+            ch.move(edgeX, ay, EDGE_MOVE_MS)
+            ch.hold(holdMs, if (forward) -1f else 1f)
+            ch.move(px, py, RETURN_MOVE_MS)
+            ch.hold(PARK_HOVER_MS, 1f)
+            log("跨页（第 $hops 跳）：「${s.appName}」第 $pa 页 → 目标第 $pd 页（要翻 $flips 页），边缘停留 ${holdMs}ms，停放点 (${px.toInt()},${py.toInt()})")
+            runChain(ax, ay, ch.segs, "跨页", cb = { ok ->
+                if (!ok) {
+                    retryOrFail(s, base, n, "跨页拖动手势未完成", cb)
+                } else {
+                    later(VERIFY_SETTLE_MS) {
+                        val rv = readNow()
+                        val landed = rv?.let { SnapshotQuery.findApp(it.snapshot, s.appName) }
+                        if (landed == null) {
+                            retryOrFail(s, base, n, "停放后找不到「${s.appName}」", cb)
+                        } else {
+                            log("停放结果：「${s.appName}」落在第 ${landed.page} 页（目标第 $pd 页，原第 $pa 页；预计翻 $flips 页）")
+                            attempt(s, base, n, cb)   // 重新定位：同页就放进文件夹，不同页再跳一次
+                        }
+                    }
+                }
+            })
+        }
+    }
     private fun onStepSuccess(s: TidyStep, base: Baseline, snap: DesktopSnapshot, cb: (Boolean) -> Unit) {
         when (s.destKind) {
             DestKind.EXISTING_FOLDER -> {
@@ -588,7 +651,7 @@ class GestureExecutor(
     }
 
     /**
-     * 拖动：长按 A → （跨页则带到屏幕边缘等翻页）→ **快速**移到目的地图案中心 → 悬停 → 松手。
+     * 同页拖动：长按 A → **快速**移到目的地图案中心 → 悬停 → 松手。（跨页见 [travel]）
      *
      * 为什么目标要换算、为什么要快（2026-10-30 一加 13 真机，截图 + 日志取证）：
      * - 拖起图标后桌面进入拖动模式：工作区缩小并下移（见 [toDragLayout]），同一个图标的屏幕位置变了；
@@ -596,26 +659,17 @@ class GestureExecutor(
      * - 手指慢慢滑过别的图标时（旧值 800ms），会在途经的格子上停留触发桌面的"让位挪动"，
      *   目标文件夹被挤到别处；到了原位置发现已不是目标。所以改成短时间直达，只在目标上悬停。
      */
-    private fun drag(a: Box, d: Box, pa: Int, pd: Int, cb: (Boolean) -> Unit) {
+    private fun drag(a: Box, d: Box, cb: (Boolean) -> Unit) {
         val (ax, ay) = center(a)
         val (nx, ny) = center(d)
         val (tx, ty) = toDragLayout(nx, ny)
         val ch = Chain(ax, ay)
         ch.hold(LONG_PRESS_MS, 1f)
-        if (pa == pd) {
-            ch.move(tx, ty, DRAG_MOVE_MS)
-        } else {
-            val forward = pd > pa
-            val edgeX = if (forward) screenW - EDGE_MARGIN_PX else EDGE_MARGIN_PX
-            ch.move(edgeX, ay, EDGE_MOVE_MS)
-            repeat(abs(pd - pa)) { ch.hold(EDGE_HOLD_MS, if (forward) -1f else 1f) }
-            ch.move(tx, ty, RETURN_MOVE_MS)
-        }
+        ch.move(tx, ty, DRAG_MOVE_MS)
         ch.hold(HOVER_MS, 1f)
-        log("拖动：第 $pa 页 (${ax.toInt()},${ay.toInt()}) → 第 $pd 页；目的地正常模式中心 (${nx.toInt()},${ny.toInt()}) → 拖动模式瞄准 (${tx.toInt()},${ty.toInt()})，共 ${ch.segs.size} 段")
+        log("同页拖动：(${ax.toInt()},${ay.toInt()})；目的地正常模式中心 (${nx.toInt()},${ny.toInt()}) → 拖动模式瞄准 (${tx.toInt()},${ty.toInt()})")
         runChain(ax, ay, ch.segs, "拖动", cb)
     }
-
     /**
      * 把"正常模式下的屏幕坐标"换算成"拖动模式下的屏幕坐标"。
      * 桌面是规则的格子（一加 13 上每格 238×389px、每页 5 列），拖动模式只是把整张格子缩放 + 平移，
