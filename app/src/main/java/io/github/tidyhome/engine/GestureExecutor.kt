@@ -42,8 +42,11 @@ class GestureExecutor(
         /** 长按图标进入拖动态。实测值。 */
         const val LONG_PRESS_MS = 1000L
 
-        /** 同页：从 A 移到目标图案中心。实测 adb 分段约 1.2s 可行，这里取 800ms，尚未用 dispatchGesture 真机验证。 */
-        const val DRAG_MOVE_MS = 800L
+        /**
+         * 同页：从 A 移到目标图案中心。**快**：途经别的图标时停留太久会触发桌面"让位挪动"，把目标挤走
+         * （2026-10-30 旧值 800ms 实测失败）。300ms 内到位，只在目标上悬停 [HOVER_MS]。估计值，待真机验证。
+         */
+        const val DRAG_MOVE_MS = 300L
 
         /** 在目标图案中心悬停后松手。实测值。 */
         const val HOVER_MS = 900L
@@ -66,8 +69,8 @@ class GestureExecutor(
         /** 每翻一页在边缘停留的时长。估计值，待真机实测。 */
         const val EDGE_HOLD_MS = 1000L
 
-        /** 翻到目的地页后移回目标图案中心的时长。估计值，待真机实测。 */
-        const val RETURN_MOVE_MS = 600L
+        /** 翻到目的地页后移回目标图案中心的时长，同样要快（理由见 [DRAG_MOVE_MS]）。估计值，待真机实测。 */
+        const val RETURN_MOVE_MS = 300L
 
         /** 边缘位置离屏幕边的像素（往后页 x=w-6，往前页 x=6）。方案给定值。 */
         const val EDGE_MARGIN_PX = 6f
@@ -85,6 +88,9 @@ class GestureExecutor(
         // ---- 校验 / 重试
         /** 松手后等桌面重排再读树校验。探针沿用值，实测可用。 */
         const val VERIFY_SETTLE_MS = 1000L
+
+        /** 第一次校验像成功后，再隔多久复读一次确认（毫秒）。估计值。 */
+        const val RECHECK_MS = 700L
 
         /** 一步最多尝试次数（首次 + 重试 1 次）。 */
         const val MAX_ATTEMPTS = 2
@@ -445,7 +451,7 @@ class GestureExecutor(
                     return@goToPage
                 }
                 log("A「${s.appName}」$aBox；目的地$dBox")
-                drag(aBox, dBox, pa, pd, s) { ok ->
+                drag(aBox, dBox, pa, pd) { ok ->
                     if (!ok) {
                         retryOrFail(s, base, n, "拖动手势未完成", cb)
                         return@drag
@@ -456,7 +462,16 @@ class GestureExecutor(
                         if (rv == null) {
                             retryOrFail(s, base, n, "校验时读不到桌面", cb)
                         } else if (isSuccess(s, base, rv.snapshot)) {
-                            onStepSuccess(s, base, rv.snapshot, cb)
+                            // 隔一会儿复读：动画中途的快照会误报成功（2026-10-30 日志里「微信放进社交」报了成功，
+                            // 之后截图里微信仍单独在页面上）。两次都成立才算。
+                            later(RECHECK_MS) {
+                                val rv2 = readNow()
+                                if (rv2 != null && isSuccess(s, base, rv2.snapshot)) {
+                                    onStepSuccess(s, base, rv2.snapshot, cb)
+                                } else {
+                                    retryOrFail(s, base, n, "复查未通过（刚读到像成功，稍后又不是了）", cb)
+                                }
+                            }
                         } else {
                             retryOrFail(s, base, n, "校验未通过（A 仍在桌面上或目的地不对）", cb)
                         }
@@ -534,37 +549,15 @@ class GestureExecutor(
         }
     }
 
-    /**
-     * 依次发出连续手势的各段；任一段被取消 → cb(false)；中途收到中止 → 抬起手指后 cb(false)。
-     * @param laterSegs 非空时：[segs] 发完后手指**仍按着**（最后一段 willContinue），此时调用它取后续各段
-     *   （拖动要在这里重读桌面）；返回 null 表示放弃，抬起手指并 cb(false)。
-     */
-    private fun runChain(
-        startX: Float, startY: Float, segs0: List<Seg>, tag: String,
-        laterSegs: (() -> List<Seg>?)? = null, cb: (Boolean) -> Unit,
-    ) {
-        val segs = ArrayList(segs0)
-        var provider = laterSegs
+    /** 依次发出连续手势的各段；任一段被取消 → cb(false)；中途收到中止 → 抬起手指后 cb(false)。 */
+    private fun runChain(startX: Float, startY: Float, segs: List<Seg>, tag: String, cb: (Boolean) -> Unit) {
         fun step(i: Int, prev: StrokeDescription?, cx: Float, cy: Float) {
             if (i >= segs.size) {
-                val p = provider
-                if (p == null) {
-                    cb(true)
-                    return
-                }
-                provider = null
-                val more = if (aborted()) null else p()
-                if (more == null || prev == null) {
-                    if (prev != null) liftFinger(prev, cx, cy)
-                    cb(false)
-                    return
-                }
-                segs.addAll(more)
-                step(i, prev, cx, cy)
+                cb(true)
                 return
             }
             val seg = segs[i]
-            val last = i == segs.size - 1 && provider == null
+            val last = i == segs.size - 1
             val path = Path().apply { moveTo(cx, cy); lineTo(seg.x, seg.y) }
             val stroke = prev?.continueStroke(path, 0L, seg.ms, !last)
                 ?: StrokeDescription(path, 0L, seg.ms, !last)
@@ -595,75 +588,42 @@ class GestureExecutor(
     }
 
     /**
-     * 拖动分两阶段：
-     * 1. 按住 A（同页）/ 按住 A 再带到屏幕边缘等翻页（跨页），手指不抬；
-     * 2. 此时桌面已进入拖动模式（工作区被缩放平移），**重读目的地位置**，再移过去、悬停、松手。
-     * 日志里「拖动前」坐标与「拖动中」坐标之差就是这次拖动模式带来的位移，供下次校准。
+     * 拖动：长按 A → （跨页则带到屏幕边缘等翻页）→ **快速**移到目的地图案中心 → 悬停 → 松手。
+     *
+     * 为什么目标要换算、为什么要快（2026-10-30 一加 13 真机，截图 + 日志取证）：
+     * - 拖起图标后桌面进入拖动模式：工作区缩小并下移（见 [toDragLayout]），同一个图标的屏幕位置变了；
+     *   而且按住 1 秒后弹出的是长按快捷菜单，工作区不在节点树里，拖动中读不到目标，只能靠换算。
+     * - 手指慢慢滑过别的图标时（旧值 800ms），会在途经的格子上停留触发桌面的"让位挪动"，
+     *   目标文件夹被挤到别处；到了原位置发现已不是目标。所以改成短时间直达，只在目标上悬停。
      */
-    private fun drag(a: Box, d: Box, pa: Int, pd: Int, s: TidyStep, cb: (Boolean) -> Unit) {
+    private fun drag(a: Box, d: Box, pa: Int, pd: Int, cb: (Boolean) -> Unit) {
         val (ax, ay) = center(a)
-        val (dx, dy) = center(d)
+        val (nx, ny) = center(d)
+        val (tx, ty) = toDragLayout(nx, ny)
         val ch = Chain(ax, ay)
         ch.hold(LONG_PRESS_MS, 1f)
-        if (pa != pd) {
+        if (pa == pd) {
+            ch.move(tx, ty, DRAG_MOVE_MS)
+        } else {
             val forward = pd > pa
             val edgeX = if (forward) screenW - EDGE_MARGIN_PX else EDGE_MARGIN_PX
             ch.move(edgeX, ay, EDGE_MOVE_MS)
             repeat(abs(pd - pa)) { ch.hold(EDGE_HOLD_MS, if (forward) -1f else 1f) }
+            ch.move(tx, ty, RETURN_MOVE_MS)
         }
-        val phase1 = ArrayList(ch.segs)
-        val fx = ch.x
-        val fy = ch.y
-        log("拖动：第 $pa 页 (${ax.toInt()},${ay.toInt()}) → 第 $pd 页，拖动前目的地中心 (${dx.toInt()},${dy.toInt()})；先按住 ${phase1.size} 段，再重读目的地")
-        runChain(ax, ay, phase1, "拖动", laterSegs = {
-            val (tx, ty) = retarget(s, d, pd)
-            val c2 = Chain(fx, fy)
-            c2.move(tx, ty, if (pa == pd) DRAG_MOVE_MS else RETURN_MOVE_MS)
-            c2.hold(HOVER_MS, 1f)
-            c2.segs
-        }, cb = cb)
+        ch.hold(HOVER_MS, 1f)
+        log("拖动：第 $pa 页 (${ax.toInt()},${ay.toInt()}) → 第 $pd 页；目的地正常模式中心 (${nx.toInt()},${ny.toInt()}) → 拖动模式瞄准 (${tx.toInt()},${ty.toInt()})，共 ${ch.segs.size} 段")
+        runChain(ax, ay, ch.segs, "拖动", cb)
     }
 
-    private var dragTreeDumped = false
-
-    /** 拖动模式下目的地的瞄准点：优先重读桌面；读不到再按估计的缩放平移换算。 */
-    private fun retarget(s: TidyStep, dNormal: Box, pd: Int): Pair<Float, Float> {
-        val (nx, ny) = center(dNormal)
-        val rd = readNow()
-        if (!dragTreeDumped) {
-            dragTreeDumped = true
-            dumpDragTree()
-        }
-        val box = rd?.let { findDest(s, it.snapshot) }?.takeIf { it.page == pd }?.box
-        if (box != null) {
-            val (x, y) = center(box)
-            log("拖动中重读到目的地 $box（拖动前 $dNormal）→ 瞄准 (${x.toInt()},${y.toInt()})，相对拖动前位移 (${(x - nx).toInt()},${(y - ny).toInt()})")
-            return Pair(x, y)
-        }
-        val x = DRAG_MODE_SCALE * nx + (1f - DRAG_MODE_SCALE) * screenW / 2f
-        val y = DRAG_MODE_SCALE * ny + DRAG_MODE_SHIFT_Y_RATIO * screenH
-        log("拖动中读不到目的地${if (rd == null) "（桌面树读取失败）" else "（目的地不在读到的当前页上）"}，按估计缩放平移换算：(${nx.toInt()},${ny.toInt()}) → (${x.toInt()},${y.toInt()})")
-        return Pair(x, y)
-    }
-
-    /** 第一次拖动时把拖动模式下的整棵节点树存下来（探针同款导出），出问题时用来对照。 */
-    private fun dumpDragTree() {
-        try {
-            val root = svc.launcherRootInfo()?.first ?: run {
-                log("拖动中：找不到桌面窗口，没法导出节点树")
-                return
-            }
-            try {
-                val res = io.github.tidyhome.probe.NodeDumper.dumpToFile(svc, root, "drag-mode", svc.headerLines("拖动模式下"), false)
-                log("拖动模式节点树已保存：${res.file?.name}（节点数见文件）")
-            } finally {
-                LauncherNodes.release(root)
-            }
-        } catch (t: Throwable) {
-            log("导出拖动模式节点树失败：$t")
-        }
-    }
-
+    /**
+     * 把"正常模式下的屏幕坐标"换算成"拖动模式下的屏幕坐标"。
+     * 桌面是规则的格子（一加 13 上每格 238×389px、每页 5 列），拖动模式只是把整张格子缩放 + 平移，
+     * 所以对格子中心做同一个仿射变换即可：横向以屏幕中心为准缩放，纵向 y' = s·y + 屏高×[DRAG_MODE_SHIFT_Y_RATIO]。
+     * 参数来自 2026-10-30 的两张拖动截图（0.886 倍，各行中心 862 / 1206 / 1550），换算与截图里幽灵图标位置吻合。
+     */
+    private fun toDragLayout(x: Float, y: Float): Pair<Float, Float> =
+        Pair(DRAG_MODE_SCALE * x + (1f - DRAG_MODE_SCALE) * screenW / 2f, DRAG_MODE_SCALE * y + DRAG_MODE_SHIFT_Y_RATIO * screenH)
     private fun tap(x: Float, y: Float, cb: (Boolean) -> Unit) {
         val stroke = StrokeDescription(Path().apply { moveTo(x, y) }, 0L, TAP_MS, false)
         dispatch(stroke, "轻点", cb)
